@@ -91,6 +91,7 @@ impl App {
         match DomService::get_dom_state(&self.browser).await {
             Ok(state) => {
                 self.dom_content = state.llm_representation;
+                self.dom_scroll = 0;
                 let count = state.selector_map.len();
                 self.add_log(LogLevel::Success, &format!("DOM refreshed: {} interactive elements", count));
             }
@@ -131,12 +132,51 @@ impl App {
             "click" => {
                 let index_str = args.trim_start_matches('[').trim_end_matches(']');
                 if let Ok(index) = index_str.parse::<usize>() {
+                    let url_before = self.browser.get_url().await.unwrap_or_default();
+                    let tab_ids_before = self.browser.get_current_tab_ids().await;
                     match self.browser.click_element(index).await {
                         Ok(_) => {
                             self.add_log(LogLevel::Success, &format!("Clicked element [{}]", index));
-                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                            match self.browser.check_and_switch_to_new_tab(&tab_ids_before).await {
+                                Ok(true) => {
+                                    let new_url = self.browser.get_url().await.unwrap_or_default();
+                                    let new_title = self.browser.get_title().await.unwrap_or_default();
+                                    self.add_log(LogLevel::Info, &format!("New tab opened: {} ({})", new_title, new_url));
+                                    self.refresh_status().await;
+                                }
+                                Ok(false) => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    let url_after = self.browser.get_url().await.unwrap_or_default();
+                                    if url_after != url_before {
+                                        let new_title = self.browser.get_title().await.unwrap_or_default();
+                                        self.add_log(LogLevel::Info, &format!("Navigated to: {} ({})", new_title, url_after));
+                                        self.refresh_status().await;
+                                    }
+                                }
+                                Err(e) => self.add_log(LogLevel::Error, &format!("Tab check failed: {}", e)),
+                            }
+                            let _ = self.refresh_dom().await;
                         }
-                        Err(e) => self.add_log(LogLevel::Error, &format!("Click failed: {}", e)),
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            if err_msg.contains("no_fa_indices") || err_msg.contains("not found") {
+                                self.add_log(LogLevel::Info, "Re-injecting element indices...");
+                                if DomService::inject_fa_indices(&self.browser).await.is_ok() {
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                    match self.browser.click_element(index).await {
+                                        Ok(_) => {
+                                            self.add_log(LogLevel::Success, &format!("Clicked element [{}] (retry)", index));
+                                            let _ = self.refresh_dom().await;
+                                        }
+                                        Err(retry_err) => self.add_log(LogLevel::Error, &format!("Click failed: {}", retry_err)),
+                                    }
+                                } else {
+                                    self.add_log(LogLevel::Error, &format!("Click failed: {}", err_msg));
+                                }
+                            } else {
+                                self.add_log(LogLevel::Error, &format!("Click failed: {}", err_msg));
+                            }
+                        }
                     }
                 } else {
                     self.add_log(LogLevel::Error, "Usage: click <index> (e.g., click 0 or click [0])");
@@ -152,7 +192,10 @@ impl App {
                 if let Ok(index) = index_str.parse::<usize>() {
                     let text = input_parts[1].trim_matches('"').trim_matches('\'');
                     match self.browser.type_text(index, text).await {
-                        Ok(_) => self.add_log(LogLevel::Success, &format!("Typed '{}' into [{}]", text, index)),
+                        Ok(_) => {
+                            self.add_log(LogLevel::Success, &format!("Typed '{}' into [{}]", text, index));
+                            let _ = self.refresh_dom().await;
+                        }
                         Err(e) => self.add_log(LogLevel::Error, &format!("Input failed: {}", e)),
                     }
                 } else {
@@ -164,7 +207,11 @@ impl App {
                 let direction = scroll_parts.first().copied().unwrap_or("down");
                 let amount: u32 = scroll_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(500);
                 match self.browser.scroll(direction, amount).await {
-                    Ok(_) => self.add_log(LogLevel::Success, &format!("Scrolled {} by {}px", direction, amount)),
+                    Ok(_) => {
+                        self.add_log(LogLevel::Success, &format!("Scrolled {} by {}px", direction, amount));
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        let _ = self.refresh_dom().await;
+                    }
                     Err(e) => self.add_log(LogLevel::Error, &format!("Scroll failed: {}", e)),
                 }
             }
@@ -175,7 +222,11 @@ impl App {
                     return;
                 }
                 match self.browser.send_keys(keys).await {
-                    Ok(_) => self.add_log(LogLevel::Success, &format!("Sent keys: {}", keys)),
+                    Ok(_) => {
+                        self.add_log(LogLevel::Success, &format!("Sent keys: {}", keys));
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let _ = self.refresh_dom().await;
+                    }
                     Err(e) => self.add_log(LogLevel::Error, &format!("Send keys failed: {}", e)),
                 }
             }
@@ -220,6 +271,7 @@ impl App {
                 match self.browser.new_tab(url_arg).await {
                     Ok(_) => {
                         self.add_log(LogLevel::Success, "New tab opened");
+                        let _ = self.refresh_dom().await;
                         let _ = self.refresh_status().await;
                     }
                     Err(e) => self.add_log(LogLevel::Error, &format!("New tab failed: {}", e)),
@@ -245,6 +297,7 @@ impl App {
                     match self.browser.close_tab(index).await {
                         Ok(_) => {
                             self.add_log(LogLevel::Success, &format!("Tab {} closed", index));
+                            let _ = self.refresh_dom().await;
                             let _ = self.refresh_status().await;
                         }
                         Err(e) => self.add_log(LogLevel::Error, &format!("Tab close failed: {}", e)),
@@ -387,7 +440,14 @@ impl App {
                         .map_or(self.input.len(), |(i, _)| self.cursor_position + i);
                 }
             }
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.dom_scroll = 0;
+            }
             KeyCode::Home => self.cursor_position = 0,
+            KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                let total_lines = self.dom_content.lines().count();
+                self.dom_scroll = total_lines.saturating_sub(1);
+            }
             KeyCode::End => self.cursor_position = self.input.len(),
             KeyCode::Enter => {
                 let cmd = self.input.clone();
@@ -403,6 +463,30 @@ impl App {
             }
             KeyCode::F(5) => {
                 self.pending_refresh = true;
+            }
+            KeyCode::PageUp => {
+                if self.dom_scroll > 0 {
+                    self.dom_scroll = self.dom_scroll.saturating_sub(10);
+                }
+            }
+            KeyCode::PageDown => {
+                let total_lines = self.dom_content.lines().count();
+                let max_scroll = total_lines.saturating_sub(1);
+                if self.dom_scroll < max_scroll {
+                    self.dom_scroll = (self.dom_scroll + 10).min(max_scroll);
+                }
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.dom_scroll > 0 {
+                    self.dom_scroll = self.dom_scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                let total_lines = self.dom_content.lines().count();
+                let max_scroll = total_lines.saturating_sub(1);
+                if self.dom_scroll < max_scroll {
+                    self.dom_scroll += 1;
+                }
             }
             _ => {}
         }
@@ -455,7 +539,7 @@ fn ui(f: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     let dom_block = Block::default()
-        .title(" DOM Tree (F5 to refresh) ")
+        .title(" DOM Tree (F5 refresh, PgUp/PgDn scroll) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let dom_paragraph = Paragraph::new(app.dom_content.clone())
@@ -641,6 +725,8 @@ async fn run_app(
         }
         if app.pending_refresh {
             app.pending_refresh = false;
+            app.add_log(LogLevel::Info, "Refreshing DOM...");
+            let _ = terminal.draw(|f| ui(f, app));
             let _ = app.refresh_dom().await;
         }
         if app.pending_reload {

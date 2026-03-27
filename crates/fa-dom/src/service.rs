@@ -14,12 +14,14 @@ impl DomService {
         Ok(serialize_dom(&root))
     }
 
-    async fn inject_fa_indices(session: &BrowserSession) -> anyhow::Result<()> {
+    pub async fn inject_fa_indices(session: &BrowserSession) -> anyhow::Result<()> {
         let js = r#"
             (function() {
+                if (!document.body) return -1;
                 var idx = 0;
                 var skipTags = new Set(['SCRIPT','STYLE','NOSCRIPT','META','LINK','HEAD','SVG','PATH','G','DEFS','USE','CLIPPATH']);
                 var interactiveTags = new Set(['A','BUTTON','INPUT','TEXTAREA','SELECT','OPTION','DETAILS','SUMMARY','DIALOG','IFRAME','OBJECT']);
+                var semanticTags = new Set(['H1','H2','H3','H4','H5','H6','P','LABEL','IMG','VIDEO','AUDIO','FIGCAPTION','BLOCKQUOTE','PRE','CODE','STRONG','EM','B','I','MARK','SMALL','SPAN']);
 
                 function walk(node, depth) {
                     if (depth > 30) return;
@@ -28,9 +30,38 @@ impl DomService {
 
                     var style = window.getComputedStyle(node);
                     var visible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-                    var interactive = interactiveTags.has(node.tagName) || node.onclick || node.getAttribute('role') === 'button' || node.getAttribute('role') === 'link' || node.getAttribute('role') === 'textbox' || node.getAttribute('tabindex') !== null;
+                    if (!visible) return;
 
-                    if (visible && (interactive || node.children.length > 0)) {
+                    var interactive = interactiveTags.has(node.tagName)
+                        || node.onclick
+                        || node.getAttribute('role') === 'button'
+                        || node.getAttribute('role') === 'link'
+                        || node.getAttribute('role') === 'textbox'
+                        || node.getAttribute('role') === 'checkbox'
+                        || node.getAttribute('role') === 'radio'
+                        || node.getAttribute('role') === 'tab'
+                        || node.getAttribute('role') === 'menuitem'
+                        || node.getAttribute('role') === 'switch'
+                        || node.getAttribute('tabindex') !== null
+                        || style.cursor === 'pointer';
+
+                    var hasDirectText = false;
+                    for (var i = 0; i < node.childNodes.length; i++) {
+                        if (node.childNodes[i].nodeType === 3 && node.childNodes[i].textContent.trim().length > 0) {
+                            hasDirectText = true;
+                            break;
+                        }
+                    }
+
+                    var meaningful = interactive
+                        || semanticTags.has(node.tagName)
+                        || hasDirectText
+                        || node.tagName === 'IMG'
+                        || node.tagName === 'INPUT'
+                        || node.tagName === 'TEXTAREA'
+                        || node.tagName === 'SELECT';
+
+                    if (meaningful) {
                         node.setAttribute('data-fa-index', idx);
                         idx++;
                     }

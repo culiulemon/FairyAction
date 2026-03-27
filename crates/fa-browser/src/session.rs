@@ -3,7 +3,9 @@ use crate::events::{BrowserEvent, EventBus};
 use crate::profile::BrowserProfile;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Error)]
 pub enum BrowserError {
@@ -51,7 +53,7 @@ pub struct BrowserStateSummary {
 
 pub struct BrowserSession {
     profile: BrowserProfile,
-    cdp_client: CdpClient,
+    cdp_client: Arc<Mutex<CdpClient>>,
     event_bus: EventBus,
     process_id: Option<u32>,
     port: u16,
@@ -106,7 +108,7 @@ impl BrowserSession {
 
         Ok(Self {
             profile,
-            cdp_client,
+            cdp_client: Arc::new(Mutex::new(cdp_client)),
             event_bus,
             process_id,
             port,
@@ -135,6 +137,55 @@ impl BrowserSession {
         }
 
         anyhow::bail!("No page target found after waiting")
+    }
+
+    async fn get_target_ws_url(port: u16, target_id: &str) -> Result<String, anyhow::Error> {
+        let list_url = format!("http://localhost:{}/json/list", port);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()?;
+
+        for _ in 0..10 {
+            let resp = client.get(&list_url).send().await?;
+            let targets: Vec<serde_json::Value> = resp.json().await?;
+
+            if let Some(target) = targets.iter().find(|t| {
+                t.get("id").and_then(|v| v.as_str()) == Some(target_id)
+            }) {
+                if let Some(ws_url) = target["webSocketDebuggerUrl"].as_str() {
+                    if !ws_url.is_empty() {
+                        return Ok(ws_url.to_string());
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+
+        anyhow::bail!("No WebSocket URL found for target {}", target_id)
+    }
+
+    async fn reconnect_cdp_to_target(&self, target_id: &str) -> Result<(), BrowserError> {
+        let ws_url = Self::get_target_ws_url(self.port, target_id)
+            .await
+            .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?;
+
+        tracing::info!("Switching CDP connection to target {} ({})", target_id, ws_url);
+
+        let mut cdp = self.cdp_client.lock().await;
+        cdp.reconnect(&ws_url)
+            .await
+            .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?;
+
+        cdp.execute_unit("Page.enable", serde_json::json!({}))
+            .await
+            .map_err(|e| BrowserError::CdpError(format!("Failed to enable Page domain: {}", e)))?;
+
+        cdp.execute_unit("Runtime.enable", serde_json::json!({}))
+            .await
+            .map_err(|e| BrowserError::CdpError(format!("Failed to enable Runtime domain: {}", e)))?;
+
+        Ok(())
     }
 
     fn find_free_port() -> Result<u16, std::io::Error> {
@@ -202,13 +253,12 @@ impl BrowserSession {
             url: url.to_string(),
         });
 
-        self.cdp_client
-            .execute("Page.navigate", serde_json::json!({ "url": url }))
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute("Page.navigate", serde_json::json!({ "url": url }))
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))?;
 
-        self.cdp_client
-            .wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(30))
+        cdp.wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(30))
             .await
             .map_err(|_| BrowserError::NavigationTimeout)?;
 
@@ -221,22 +271,22 @@ impl BrowserSession {
     }
 
     pub async fn go_back(&self) -> Result<(), BrowserError> {
-        self.cdp_client
-            .execute_unit("Page.goBack", serde_json::json!({}))
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute_unit("Page.goBack", serde_json::json!({}))
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))
     }
 
     pub async fn go_forward(&self) -> Result<(), BrowserError> {
-        self.cdp_client
-            .execute_unit("Page.goForward", serde_json::json!({}))
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute_unit("Page.goForward", serde_json::json!({}))
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))
     }
 
     pub async fn reload(&self) -> Result<(), BrowserError> {
-        self.cdp_client
-            .execute_unit("Page.reload", serde_json::json!({}))
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute_unit("Page.reload", serde_json::json!({}))
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))
     }
@@ -244,8 +294,8 @@ impl BrowserSession {
     pub async fn screenshot(&self) -> Result<String, BrowserError> {
         self.event_bus.publish(BrowserEvent::Screenshot);
 
-        let result = self
-            .cdp_client
+        let cdp = self.cdp_client.lock().await;
+        let result = cdp
             .execute(
                 "Page.captureScreenshot",
                 serde_json::json!({
@@ -264,8 +314,8 @@ impl BrowserSession {
     }
 
     pub async fn get_url(&self) -> Result<String, BrowserError> {
-        let result = self
-            .cdp_client
+        let cdp = self.cdp_client.lock().await;
+        let result = cdp
             .execute(
                 "Runtime.evaluate",
                 serde_json::json!({
@@ -280,8 +330,8 @@ impl BrowserSession {
     }
 
     pub async fn get_title(&self) -> Result<String, BrowserError> {
-        let result = self
-            .cdp_client
+        let cdp = self.cdp_client.lock().await;
+        let result = cdp
             .execute(
                 "Runtime.evaluate",
                 serde_json::json!({
@@ -299,8 +349,8 @@ impl BrowserSession {
         &self,
         expression: &str,
     ) -> Result<serde_json::Value, BrowserError> {
-        let result = self
-            .cdp_client
+        let cdp = self.cdp_client.lock().await;
+        let result = cdp
             .execute(
                 "Runtime.evaluate",
                 serde_json::json!({
@@ -317,26 +367,50 @@ impl BrowserSession {
 
     pub async fn click_element(&self, index: usize) -> Result<(), BrowserError> {
         self.event_bus.publish(BrowserEvent::Click { index });
+
         let js = format!(
-            r#"(function() {{ var el = document.querySelector('[data-fa-index="{}"]'); if (el) {{ el.click(); return true; }} return false; }})()"#,
+            r#"(function() {{
+                var el = document.querySelector('[data-fa-index="{}"]');
+                if (!el) {{
+                    var all = document.querySelectorAll('[data-fa-index]');
+                    if (all.length === 0) return {{ found: false, reason: 'no_fa_indices' }};
+                    return {{ found: false, reason: 'index_out_of_range', total: all.length }};
+                }}
+                el.scrollIntoView({{ block: 'center', behavior: 'instant' }});
+                var rect = el.getBoundingClientRect();
+                return {{
+                    found: true,
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                    tag: el.tagName.toLowerCase(),
+                    text: (el.textContent || '').trim().substring(0, 50)
+                }};
+            }})()"#,
             index
         );
         let result = self.evaluate_js(&js).await?;
-        let success = result["result"]["value"].as_bool().unwrap_or(false);
-        if !success {
+
+        let val = &result["result"]["value"];
+        let found = val["found"].as_bool().unwrap_or(false);
+        if !found {
+            let reason = val["reason"].as_str().unwrap_or("unknown");
+            if reason == "no_fa_indices" {
+                return Err(BrowserError::CdpError(format!(
+                    "Element indices not found. Press F5 to refresh DOM first."
+                )));
+            }
+            let total = val["total"].as_u64().unwrap_or(0);
             return Err(BrowserError::CdpError(format!(
-                "Element with index {} not found",
-                index
+                "Element [{}] not found ({} elements available). Press F5 to refresh.",
+                index, total
             )));
         }
-        Ok(())
-    }
 
-    pub async fn click_coordinate(&self, x: f64, y: f64) -> Result<(), BrowserError> {
-        self.event_bus.publish(BrowserEvent::ClickCoordinate { x, y });
+        let x = val["x"].as_f64().unwrap_or(0.0);
+        let y = val["y"].as_f64().unwrap_or(0.0);
 
-        self.cdp_client
-            .execute(
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute(
                 "Input.dispatchMouseEvent",
                 serde_json::json!({
                     "type": "mousePressed",
@@ -349,8 +423,40 @@ impl BrowserSession {
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))?;
 
-        self.cdp_client
-            .execute(
+        cdp.execute(
+                "Input.dispatchMouseEvent",
+                serde_json::json!({
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "clickCount": 1
+                }),
+            )
+            .await
+            .map_err(|e| BrowserError::CdpError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn click_coordinate(&self, x: f64, y: f64) -> Result<(), BrowserError> {
+        self.event_bus.publish(BrowserEvent::ClickCoordinate { x, y });
+
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute(
+                "Input.dispatchMouseEvent",
+                serde_json::json!({
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "clickCount": 1
+                }),
+            )
+            .await
+            .map_err(|e| BrowserError::CdpError(e.to_string()))?;
+
+        cdp.execute(
                 "Input.dispatchMouseEvent",
                 serde_json::json!({
                     "type": "mouseReleased",
@@ -385,8 +491,8 @@ impl BrowserSession {
             )));
         }
 
-        self.cdp_client
-            .execute(
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute(
                 "Input.insertText",
                 serde_json::json!({ "text": text }),
             )
@@ -417,8 +523,8 @@ impl BrowserSession {
             keys: keys.to_string(),
         });
 
-        self.cdp_client
-            .execute_unit("Input.insertText", serde_json::json!({ "text": keys }))
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute_unit("Input.insertText", serde_json::json!({ "text": keys }))
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))
     }
@@ -463,13 +569,10 @@ impl BrowserSession {
         let target_tab = tabs.get(index).ok_or(BrowserError::PageNotFound)?;
         let target_id = target_tab.id.clone();
 
-        self.cdp_client
-            .execute_unit(
-                "Target.activateTarget",
-                serde_json::json!({ "targetId": target_id }),
-            )
-            .await
-            .map_err(|e| BrowserError::CdpError(e.to_string()))
+        self.reconnect_cdp_to_target(&target_id).await?;
+
+        tracing::info!("Switched to tab {} ({})", index, target_tab.url);
+        Ok(())
     }
 
     pub async fn close_tab(&self, index: usize) -> Result<(), BrowserError> {
@@ -479,13 +582,20 @@ impl BrowserSession {
         let target_tab = tabs.get(index).ok_or(BrowserError::PageNotFound)?;
         let target_id = target_tab.id.clone();
 
-        self.cdp_client
-            .execute_unit(
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute_unit(
                 "Target.closeTarget",
                 serde_json::json!({ "targetId": target_id }),
             )
             .await
-            .map_err(|e| BrowserError::CdpError(e.to_string()))
+            .map_err(|e| BrowserError::CdpError(e.to_string()))?;
+
+        if let Some(new_active) = tabs.iter().find(|t| t.id != target_tab.id) {
+            drop(cdp);
+            self.reconnect_cdp_to_target(&new_active.id).await?;
+        }
+
+        Ok(())
     }
 
     pub async fn new_tab(&self, url: Option<&str>) -> Result<(), BrowserError> {
@@ -493,13 +603,27 @@ impl BrowserSession {
 
         let navigate_url = url.unwrap_or("about:blank");
 
-        self.cdp_client
-            .execute_unit(
+        let cdp = self.cdp_client.lock().await;
+        let result = cdp
+            .execute(
                 "Target.createTarget",
                 serde_json::json!({ "url": navigate_url }),
             )
             .await
-            .map_err(|e| BrowserError::CdpError(e.to_string()))
+            .map_err(|e| BrowserError::CdpError(e.to_string()))?;
+
+        let target_id = result["targetId"]
+            .as_str()
+            .ok_or_else(|| BrowserError::CdpError("No targetId in createTarget response".to_string()))?;
+
+        tracing::info!("Created new tab with targetId: {}", target_id);
+
+        drop(cdp);
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        self.reconnect_cdp_to_target(target_id).await?;
+
+        Ok(())
     }
 
     pub async fn execute_cdp(
@@ -507,10 +631,45 @@ impl BrowserSession {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, BrowserError> {
-        self.cdp_client
-            .execute(method, params)
+        let cdp = self.cdp_client.lock().await;
+        cdp.execute(method, params)
             .await
             .map_err(|e| BrowserError::CdpError(e.to_string()))
+    }
+
+    pub async fn get_current_tab_ids(&self) -> Vec<String> {
+        self.get_tabs()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|t| t.id.clone())
+            .collect()
+    }
+
+    pub async fn check_and_switch_to_new_tab(&self, ids_before: &[String]) -> Result<bool, BrowserError> {
+        for attempt in 0..5 {
+            let wait_ms = if attempt == 0 { 300 } else { 500 };
+            tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+
+            let tabs_after = self.get_tabs().await.unwrap_or_default();
+
+            let new_tab = tabs_after.iter().find(|t| {
+                !ids_before.contains(&t.id) && t.url != "about:blank"
+            }).or_else(|| {
+                tabs_after.iter().find(|t| {
+                    !ids_before.contains(&t.id)
+                })
+            });
+
+            if let Some(tab) = new_tab.clone() {
+                tracing::info!("Detected new tab: {} ({}) on attempt {}", tab.id, tab.url, attempt + 1);
+                self.reconnect_cdp_to_target(&tab.id).await?;
+                return Ok(true);
+            }
+        }
+
+        tracing::info!("No new tab detected after click");
+        Ok(false)
     }
 
     pub async fn get_browser_state_summary(&self) -> Result<BrowserStateSummary, BrowserError> {

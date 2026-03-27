@@ -100,8 +100,9 @@ impl EnhancedDOMTreeNode {
     pub fn get_all_children_text(&self, max_depth: usize) -> String {
         let mut parts = Vec::new();
         self._collect_text(&mut parts, 0, max_depth);
-        let result: String = parts.join(" ").split_whitespace().collect();
-        result
+        let result: String = parts.join(" ");
+        let trimmed = result.trim().to_string();
+        trimmed
     }
 
     fn _collect_text(&self, parts: &mut Vec<String>, depth: usize, max_depth: usize) {
