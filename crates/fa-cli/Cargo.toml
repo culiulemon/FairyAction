@@ -1,0 +1,23 @@
+[package]
+name = "fa-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI entry point for FairyAction"
+
+[[bin]]
+name = "fairy-action"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+fa-config = { workspace = true }
+fa-agent = { workspace = true }
+fa-browser = { workspace = true }

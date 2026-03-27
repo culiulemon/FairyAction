@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fa-config",
+    "crates/fa-browser",
+    "crates/fa-dom",
+    "crates/fa-actor",
+    "crates/fa-llm",
+    "crates/fa-agent",
+    "crates/fa-tools",
+    "crates/fa-tester",
+    "crates/fa-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+futures = "0.3"
+async-trait = "0.1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+dotenvy = "0.15"
+dirs = "6"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+
+fa-config = { path = "crates/fa-config" }
+fa-browser = { path = "crates/fa-browser" }
+fa-dom = { path = "crates/fa-dom" }
+fa-actor = { path = "crates/fa-actor" }
+fa-llm = { path = "crates/fa-llm" }
+fa-agent = { path = "crates/fa-agent" }
+fa-tools = { path = "crates/fa-tools" }

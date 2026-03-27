@@ -1,0 +1,21 @@
+[package]
+name = "fa-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Browser session management via CDP for FairyAction"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+fa-config = { workspace = true }
+tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
