@@ -34,11 +34,17 @@ pub struct BrowserConfig {
     pub chrome_path: Option<String>,
     #[serde(default)]
     pub user_data_dir: Option<String>,
+    #[serde(default = "default_profile_name")]
+    pub profile_name: Option<String>,
+    #[serde(default = "default_app_title")]
+    pub app_title: Option<String>,
 }
 
 fn default_headless() -> bool { true }
 fn default_viewport_width() -> u32 { 1280 }
 fn default_viewport_height() -> u32 { 720 }
+fn default_profile_name() -> Option<String> { Some("Fairy".to_string()) }
+fn default_app_title() -> Option<String> { Some("FairyBrowser".to_string()) }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
@@ -49,6 +55,8 @@ impl Default for BrowserConfig {
             proxy: None,
             chrome_path: None,
             user_data_dir: None,
+            profile_name: default_profile_name(),
+            app_title: default_app_title(),
         }
     }
 }
@@ -126,6 +134,12 @@ impl Config {
         if let Ok(v) = std::env::var("FA_BROWSER_CHROME_PATH") {
             self.browser.chrome_path = Some(v);
         }
+        if let Ok(v) = std::env::var("FA_BROWSER_PROFILE_NAME") {
+            self.browser.profile_name = Some(v);
+        }
+        if let Ok(v) = std::env::var("FA_BROWSER_APP_TITLE") {
+            self.browser.app_title = Some(v);
+        }
         self
     }
 
@@ -168,6 +182,8 @@ impl Config {
                 "chrome_path" => self.browser.chrome_path = Some(value.to_string()),
                 "proxy" => self.browser.proxy = Some(value.to_string()),
                 "user_data_dir" => self.browser.user_data_dir = Some(value.to_string()),
+                "profile_name" => self.browser.profile_name = Some(value.to_string()),
+                "app_title" => self.browser.app_title = Some(value.to_string()),
                 _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
             },
             _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),

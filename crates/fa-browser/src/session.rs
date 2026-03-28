@@ -68,6 +68,8 @@ impl BrowserSession {
         let chrome_path = profile.chrome_path();
         let args = profile.build_args(port);
 
+        profile.prepare_profile_dir();
+
         tracing::info!("Launching browser: {} {:?}", chrome_path, args);
 
         let child = std::process::Command::new(&chrome_path)
@@ -105,6 +107,13 @@ impl BrowserSession {
             .map_err(|e| BrowserError::CdpError(format!("Failed to enable Runtime domain: {}", e)))?;
 
         let event_bus = EventBus::new(256);
+
+        if let Some(title) = &profile.app_title {
+            let js = format!("document.title = {}", serde_json::to_string(title).unwrap_or_default());
+            let _ = cdp_client
+                .execute_unit("Runtime.evaluate", serde_json::json!({"expression": &js}))
+                .await;
+        }
 
         Ok(Self {
             profile,
