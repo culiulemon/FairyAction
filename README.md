@@ -400,6 +400,55 @@ fa-tester
 | 序列化 | serde + serde_json |
 | 日志 | tracing + tracing-subscriber |
 
+## 未来规划
+
+以下功能正在规划中，欢迎贡献或提出需求。
+
+### 桌面应用自动化
+
+当前版本仅支持 Chrome/Chromium 内核浏览器。下一阶段目标是支持**桌面应用 GUI 自动化**，让 AI Agent 能够操控任意 Windows/macOS 应用：
+
+| 阶段 | 技术方案 | 说明 |
+|------|---------|------|
+| Windows 浏览器 | WinRT / UIAutomation | 除 Chrome 外，支持 Edge、Brave、Firefox |
+| Windows 桌面应用 | Win32 API / UI Automation | 捕获窗口、控件树、模拟输入 |
+| macOS | Accessibility API | 支持 Safari、桌面应用 |
+| macOS iOS 模拟器 | XCTest / WebDriverAgent | iOS 应用自动化 |
+
+### 平台扩展
+
+| 目标 | 说明 |
+|------|------|
+| Linux 浏览器支持 | Ubuntu/Debian 上的 Chrome、Firefox |
+| iOS Safari | Remote Debugger + CDP 协议模拟 |
+| Android Chrome | ADB + Chrome DevTools Protocol |
+| 移动端真机/模拟器 | Appium 协议兼容层 |
+
+### 功能增强
+
+| 功能 | 说明 |
+|------|------|
+| 文件上传/下载 | 拦截文件选择对话框，支持自动化文件上传 |
+| Cookie / Storage 管理 | 导出/导入 Cookie、localStorage、sessionStorage |
+| 网络请求拦截 | 监听、修改、阻断 XHR/Fetch 请求 |
+| 视觉理解 | 结合多模态模型（GPT-4V、Claude Vision）理解页面截图 |
+| 自主导航 | Agent 自主决策下一步操作，无需人工每步干预 |
+| 会话状态持久化 | 跨进程保持登录状态、Cookie、localStorage |
+| 插件/脚本注入 | 自动化注入油猴脚本或浏览器扩展 |
+
+### 多浏览器支持
+
+当前默认使用 Chrome，未来计划通过统一的抽象层同时支持：
+
+- **Microsoft Edge** — Chromium 内核，Remote Debugging Protocol
+- **Brave** — Chromium 内核
+- **Firefox** — Marionette / WebDriver（架构不同，需独立适配）
+- **Arc** — 基于 Chromium
+
+所有浏览器共用同一套 JSON 协议接口，外部 Agent 无需关心底层实现。
+
+---
+
 ## License
 
 MIT License. Copyright (c) 2026 FairyAction.
