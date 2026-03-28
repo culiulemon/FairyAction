@@ -18,17 +18,23 @@ const LAYOUT_TAGS: &[&str] = &[
     "template", "slot", "br", "hr", "wbr",
 ];
 
-pub struct DomTreeSerializer;
+pub struct DomTreeSerializer {
+    show_empty_blocks: bool,
+}
 
 impl DomTreeSerializer {
     pub fn new() -> Self {
-        Self
+        Self { show_empty_blocks: false }
+    }
+
+    pub fn with_empty_blocks() -> Self {
+        Self { show_empty_blocks: true }
     }
 
     pub fn serialize(&self, root: &EnhancedDOMTreeNode) -> (String, HashMap<usize, DomNodeInfo>) {
         let mut output = String::new();
         let mut selector_map = HashMap::new();
-        self.serialize_node(root, &mut output, &mut selector_map);
+        self.serialize_node(root, &mut output, &mut selector_map, 0);
         (output, selector_map)
     }
 
@@ -37,10 +43,11 @@ impl DomTreeSerializer {
         node: &EnhancedDOMTreeNode,
         output: &mut String,
         selector_map: &mut HashMap<usize, DomNodeInfo>,
+        depth: usize,
     ) {
         if node.node_type != 1 {
             for child in &node.children {
-                self.serialize_node(child, output, selector_map);
+                self.serialize_node(child, output, selector_map, depth);
             }
             return;
         }
@@ -59,10 +66,11 @@ impl DomTreeSerializer {
             });
 
         let index = node.get_attr("data-fa-index").and_then(|v| v.parse::<usize>().ok());
+        let is_visible_only = node.get_attr("data-fa-visible").is_some() && index.is_none();
 
         let direct_text = Self::get_direct_text(node);
 
-        if let Some(idx) = index {
+        if index.is_some() || is_visible_only {
             let attr_pairs: HashMap<String, String> = node.attributes
                 .chunks(2)
                 .filter_map(|chunk| {
@@ -76,51 +84,66 @@ impl DomTreeSerializer {
 
             let class_str = node.get_attr("class").unwrap_or_default();
             let class_hint = Self::get_class_hint(&class_str);
-            let label = if is_interactive {
-                self.get_label(node, true)
-            } else if !direct_text.is_empty() {
-                format!("\"{}\"", direct_text)
-            } else if !class_hint.is_empty() {
-                class_hint
-            } else {
-                self.get_label(node, false)
-            };
 
-            let xpath = format!("//*[@data-fa-index='{}']", idx);
-            selector_map.insert(idx, DomNodeInfo {
-                tag_name: node.node_name.clone(),
-                attributes: attr_pairs,
-                text_content: if direct_text.is_empty() { None } else { Some(direct_text.clone()) },
-                is_interactive,
-                is_visible: node.is_visible,
-                backend_node_id: Some(node.backend_node_id),
-                xpath,
-            });
-
-            let attrs_str = self.format_attributes(node);
-
-            if is_interactive {
-                output.push_str(&format!("[{}] <{}{}>", idx, tag, attrs_str));
-            } else {
-                output.push_str(&format!("[{}] {}{}", idx, tag, attrs_str));
+            let mut text_parts = Vec::new();
+            if !direct_text.is_empty() {
+                text_parts.push(direct_text.clone());
+            }
+            let attr_text = self.get_attr_label(node);
+            if !attr_text.is_empty() {
+                text_parts.push(attr_text);
+            }
+            if text_parts.is_empty() && !class_hint.is_empty() {
+                text_parts.push(class_hint);
+            }
+            if text_parts.is_empty() {
+                let fallback = self.get_label(node, is_interactive);
+                if !fallback.is_empty() {
+                    text_parts.push(fallback.trim_matches('"').to_string());
+                }
+            }
+            if text_parts.is_empty() {
+                text_parts.push(Self::tag_display_name(&tag).to_string());
             }
 
-            if !label.is_empty() {
-                output.push_str(&format!(" {}", label));
+            if let Some(idx) = index {
+                let xpath = format!("//*[@data-fa-index='{}']", idx);
+                selector_map.insert(idx, DomNodeInfo {
+                    tag_name: node.node_name.clone(),
+                    attributes: attr_pairs,
+                    text_content: if direct_text.is_empty() { None } else { Some(direct_text.clone()) },
+                    is_interactive,
+                    is_visible: node.is_visible,
+                    backend_node_id: Some(node.backend_node_id),
+                    xpath,
+                });
             }
 
-            output.push('\n');
+            let type_name = Self::tag_display_name(&tag);
+            let content = text_parts.join(" ");
+            let is_only_tag_name = text_parts.len() == 1 && text_parts[0] == type_name;
+            let skip_empty = is_only_tag_name && !self.show_empty_blocks && index.is_none();
+            if !skip_empty {
+                let indent = "  ".repeat(depth);
+                if let Some(idx) = index {
+                    output.push_str(&format!("{}[{}] {}：{}\n", indent, idx, type_name, content));
+                } else {
+                    output.push_str(&format!("{}{}：{}\n", indent, type_name, content));
+                }
+            }
         }
+
+        let child_depth = if index.is_some() || is_visible_only { depth + 1 } else { depth };
 
         if !is_interactive && direct_text.is_empty() && LAYOUT_TAGS.contains(&tag.as_str()) {
             for child in &node.children {
-                self.serialize_node(child, output, selector_map);
+                self.serialize_node(child, output, selector_map, child_depth);
             }
             return;
         }
 
         for child in &node.children {
-            self.serialize_node(child, output, selector_map);
+            self.serialize_node(child, output, selector_map, child_depth);
         }
     }
 
@@ -134,7 +157,7 @@ impl DomTreeSerializer {
                 }
             }
         }
-        parts.join(" ").split_whitespace().collect()
+        parts.join(" ").trim().to_string()
     }
 
     fn get_label(&self, node: &EnhancedDOMTreeNode, is_interactive: bool) -> String {
@@ -173,32 +196,102 @@ impl DomTreeSerializer {
         String::new()
     }
 
-    fn format_attributes(&self, node: &EnhancedDOMTreeNode) -> String {
-        let attrs = node.get_interactive_attributes();
-        if attrs.is_empty() {
-            return String::new();
+    fn tag_display_name(tag: &str) -> &'static str {
+        match tag {
+            "a" => "链接",
+            "button" => "按钮",
+            "input" => "输入框",
+            "textarea" => "文本框",
+            "select" => "下拉框",
+            "option" => "选项",
+            "img" => "图片",
+            "video" => "视频",
+            "audio" => "音频",
+            "iframe" => "内嵌框",
+            "details" => "折叠面板",
+            "summary" => "折叠标题",
+            "dialog" => "对话框",
+            "label" => "标签",
+            "h1" => "标题",
+            "h2" => "标题",
+            "h3" => "标题",
+            "h4" => "标题",
+            "h5" => "标题",
+            "h6" => "标题",
+            "p" => "段落",
+            "span" => "文字",
+            "div" => "区块",
+            "table" => "表格",
+            "form" => "表单",
+            "nav" => "导航",
+            "li" => "列表项",
+            "th" => "表头",
+            "td" => "单元格",
+            _ => "元素",
         }
-        let mut parts = Vec::new();
-        for (k, v) in &attrs {
-            if k == "data-fa-index" {
-                continue;
-            }
-            let display_val = if k == "href" || k == "src" {
-                Self::shorten_url(v, 60)
-            } else if v.len() > 80 {
-                let mut end = 80;
-                while end > 0 && !v.is_char_boundary(end) {
-                    end -= 1;
+    }
+
+    fn get_attr_label(&self, node: &EnhancedDOMTreeNode) -> String {
+        let tag = node.node_name.to_lowercase();
+        if tag == "input" {
+            let input_type = node.get_attr("type").unwrap_or_default();
+            let placeholder = node.get_attr("placeholder").unwrap_or_default();
+            let value = node.get_attr("value").unwrap_or_default();
+            let name = node.get_attr("name").unwrap_or_default();
+            let mut parts = Vec::new();
+            match input_type.as_str() {
+                "text" | "email" | "password" | "tel" | "url" | "number" | "search" => {
+                    if !placeholder.is_empty() {
+                        parts.push(placeholder);
+                    }
+                    if !value.is_empty() {
+                        parts.push(value);
+                    }
                 }
-                format!("{}...", &v[..end])
-            } else {
-                v.clone()
-            };
-            if !display_val.is_empty() {
-                parts.push(format!(" {}=\"{}\"", k, display_val));
+                "checkbox" => parts.push("复选框".to_string()),
+                "radio" => parts.push("单选框".to_string()),
+                "submit" => parts.push("提交".to_string()),
+                "reset" => parts.push("重置".to_string()),
+                "file" => parts.push("文件上传".to_string()),
+                "hidden" => return String::new(),
+                _ => {
+                    if !placeholder.is_empty() {
+                        parts.push(placeholder);
+                    }
+                }
+            }
+            if !name.is_empty() && parts.is_empty() {
+                parts.push(name);
+            }
+            return parts.join(" ");
+        }
+        if tag == "textarea" {
+            if let Some(ph) = node.get_attr("placeholder") {
+                if !ph.trim().is_empty() {
+                    return ph.trim().to_string();
+                }
             }
         }
-        parts.join("")
+        if tag == "img" {
+            if let Some(alt) = node.get_attr("alt") {
+                if !alt.trim().is_empty() {
+                    return alt.trim().to_string();
+                }
+            }
+            if let Some(src) = node.get_attr("src") {
+                return Self::shorten_url(&src, 60);
+            }
+            return "图片".to_string();
+        }
+        if tag == "a" {
+            if let Some(href) = node.get_attr("href") {
+                let shortened = Self::shorten_url(&href, 60);
+                if !shortened.is_empty() {
+                    return shortened;
+                }
+            }
+        }
+        String::new()
     }
 
     fn shorten_url(url: &str, max_len: usize) -> String {
@@ -268,6 +361,16 @@ pub fn serialize_dom(root: &EnhancedDOMTreeNode) -> SerializedDOMState {
     }
 }
 
+pub fn serialize_dom_full(root: &EnhancedDOMTreeNode) -> SerializedDOMState {
+    let serializer = DomTreeSerializer::with_empty_blocks();
+    let (llm_representation, selector_map) = serializer.serialize(root);
+
+    SerializedDOMState {
+        selector_map,
+        llm_representation,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,7 +427,84 @@ mod tests {
 
         let result = serialize_dom(&root);
         assert!(result.selector_map.contains_key(&5));
-        assert!(result.llm_representation.contains("[5] <button>"));
-        assert!(result.llm_representation.contains("Clickme") || result.llm_representation.contains("Click me"));
+        assert!(result.llm_representation.contains("[5] 按钮：Click me"));
+        let lines: Vec<&str> = result.llm_representation.lines().collect();
+        let div_line = lines.iter().find(|l| l.contains("[0]"));
+        let btn_line = lines.iter().find(|l| l.contains("[5]"));
+        assert!(div_line.unwrap().starts_with("[0]"));
+        assert!(btn_line.unwrap().starts_with("  [5]"));
+    }
+
+    #[test]
+    fn test_hierarchy_depth() {
+        let root = EnhancedDOMTreeNode {
+            node_id: 1,
+            backend_node_id: 1,
+            node_type: 1,
+            node_name: "NAV".to_string(),
+            node_value: String::new(),
+            attributes: vec!["data-fa-index".to_string(), "0".to_string()],
+            text_content: None,
+            children: vec![
+                EnhancedDOMTreeNode {
+                    node_id: 2,
+                    backend_node_id: 2,
+                    node_type: 1,
+                    node_name: "A".to_string(),
+                    node_value: String::new(),
+                    attributes: vec!["data-fa-index".to_string(), "1".to_string(), "href".to_string(), "/home".to_string()],
+                    text_content: Some("Home".to_string()),
+                    children: vec![],
+                    is_visible: true,
+                    is_interactive: true,
+                    role: None,
+                    aria_label: None,
+                    bounding_box: None,
+                },
+                EnhancedDOMTreeNode {
+                    node_id: 3,
+                    backend_node_id: 3,
+                    node_type: 1,
+                    node_name: "DIV".to_string(),
+                    node_value: String::new(),
+                    attributes: vec![],
+                    text_content: None,
+                    children: vec![
+                        EnhancedDOMTreeNode {
+                            node_id: 4,
+                            backend_node_id: 4,
+                            node_type: 1,
+                            node_name: "BUTTON".to_string(),
+                            node_value: String::new(),
+                            attributes: vec!["data-fa-index".to_string(), "2".to_string()],
+                            text_content: Some("Login".to_string()),
+                            children: vec![],
+                            is_visible: true,
+                            is_interactive: true,
+                            role: None,
+                            aria_label: None,
+                            bounding_box: None,
+                        },
+                    ],
+                    is_visible: true,
+                    is_interactive: false,
+                    role: None,
+                    aria_label: None,
+                    bounding_box: None,
+                },
+            ],
+            is_visible: true,
+            is_interactive: false,
+            role: None,
+            aria_label: None,
+            bounding_box: None,
+        };
+
+        let result = serialize_dom(&root);
+        let lines: Vec<&str> = result.llm_representation.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("[0]"));
+        assert!(lines[1].starts_with("  [1]"));
+        assert!(lines[2].starts_with("  [2]"));
     }
 }

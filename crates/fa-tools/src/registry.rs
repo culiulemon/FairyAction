@@ -1,5 +1,5 @@
 use crate::actions::ActionContext;
-use crate::params::{ActionDef, ActionResult, get_bool, get_f64, get_i64, get_string, parse_action_params};
+use crate::params::{ActionDef, ActionResult, get_bool, get_bool_raw, get_f64, get_i64, get_string, parse_action_params};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -158,15 +158,20 @@ impl Registry {
 
     async fn register_default_nav_actions(&self) {
         self.register(
-            ActionDef::new("navigate", "Navigate to a URL. Use absolute URL including protocol.")
-                .param("url", crate::params::ParamType::String, "Target URL to navigate to (include protocol, e.g. https://)")
+            ActionDef::new("navigate", "Navigate to a URL. Protocol (https://) is auto-prepended if missing.")
+                .param("url", crate::params::ParamType::String, "Target URL (protocol auto-prepended if missing)")
                 .optional_param("new_tab", crate::params::ParamType::Boolean, "Open in new tab", Value::Bool(false))
                 .terminates_sequence(),
             |ctx, params| async move {
                 let p = parse_action_params(&params);
-                let url = match get_string(&p, "url") {
+                let raw_url = match get_string(&p, "url") {
                     Some(u) => u,
                     None => return ActionResult::error("Missing required parameter: url"),
+                };
+                let url = if raw_url.starts_with("http://") || raw_url.starts_with("https://") || raw_url.starts_with("file://") {
+                    raw_url
+                } else {
+                    format!("https://{}", raw_url)
                 };
                 let new_tab = get_bool(&p, "new_tab");
                 let url_before = ctx.page_url.clone();
@@ -515,10 +520,17 @@ impl Registry {
 
         self.register(
             ActionDef::new("new_tab", "Open a new browser tab.")
-                .optional_param("url", crate::params::ParamType::String, "URL to open in new tab", Value::Null),
+                .optional_param("url", crate::params::ParamType::String, "URL to open in new tab (protocol auto-prepended if missing)", Value::Null),
             |ctx, params| async move {
                 let p = parse_action_params(&params);
-                let url = get_string(&p, "url");
+                let raw_url = get_string(&p, "url");
+                let url = raw_url.map(|u| {
+                    if u.starts_with("http://") || u.starts_with("https://") || u.starts_with("file://") {
+                        u
+                    } else {
+                        format!("https://{}", u)
+                    }
+                });
                 let url_before = ctx.page_url.clone();
                 let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 let result = if let Some(u) = url {
@@ -558,6 +570,26 @@ impl Registry {
                         ActionResult::success(format!("Result: {}", output))
                     }
                     Err(e) => ActionResult::error(format!("Evaluate failed: {}", e)),
+                }
+            },
+        ).await;
+
+        self.register(
+            ActionDef::new("toggle_annotations", "Toggle visual annotation overlay on the page. Shows colored bounding boxes with index numbers on all interactive elements.")
+                .optional_param("show", crate::params::ParamType::Boolean, "true to show, false to hide, omit to toggle", Value::Null),
+            |ctx, params| async move {
+                let p = parse_action_params(&params);
+                let show = get_bool(&p, "show");
+                let result = if show {
+                    fa_dom::service::DomService::show_annotations(&ctx.session).await
+                } else if let Some(false) = get_bool_raw(&p, "show") {
+                    fa_dom::service::DomService::hide_annotations(&ctx.session).await
+                } else {
+                    fa_dom::service::DomService::toggle_annotations(&ctx.session).await
+                };
+                match result {
+                    Ok(visible) => ActionResult::success(if visible { "Annotations shown" } else { "Annotations hidden" }),
+                    Err(e) => ActionResult::error(format!("Toggle annotations failed: {}", e)),
                 }
             },
         ).await;

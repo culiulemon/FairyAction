@@ -65,9 +65,17 @@ enum Request {
     #[serde(rename = "get_state")]
     GetState,
     #[serde(rename = "get_dom")]
-    GetDom,
+    GetDom {
+        #[serde(default)]
+        show_empty: bool,
+    },
     #[serde(rename = "list_actions")]
     ListActions,
+    #[serde(rename = "toggle_annotations")]
+    ToggleAnnotations {
+        #[serde(default)]
+        show: Option<bool>,
+    },
     #[serde(rename = "close")]
     Close,
 }
@@ -280,11 +288,16 @@ async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &
             }
         }
 
-        Request::GetDom => {
+        Request::GetDom { show_empty } => {
             let url = session.get_url().await.unwrap_or_default();
             let title = session.get_title().await.unwrap_or_default();
 
-            match DomService::get_dom_state(session).await {
+            let result = if show_empty {
+                DomService::get_dom_state_full(session).await
+            } else {
+                DomService::get_dom_state(session).await
+            };
+            match result {
                 Ok(dom_state) => {
                     let element_count = dom_state.selector_map.len();
                     Response::Dom {
@@ -306,6 +319,30 @@ async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &
             Response::Actions {
                 actions: convert_action_defs(&defs),
                 schema,
+            }
+        }
+
+        Request::ToggleAnnotations { show } => {
+            let result = match show {
+                Some(true) => DomService::show_annotations(session).await,
+                Some(false) => DomService::hide_annotations(session).await,
+                None => DomService::toggle_annotations(session).await,
+            };
+            match result {
+                Ok(visible) => Response::Ok {
+                    action: None,
+                    result: ActionResultData {
+                        success: true,
+                        output: Some(if visible { "Annotations shown".to_string() } else { "Annotations hidden".to_string() }),
+                        error: None,
+                        extracted_content: None,
+                        is_done: false,
+                        state_after: None,
+                    },
+                },
+                Err(e) => Response::Error {
+                    message: format!("Toggle annotations failed: {}", e),
+                },
             }
         }
 

@@ -9,7 +9,7 @@ use fa_dom::service::DomService;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 #[derive(Debug)]
@@ -45,6 +45,8 @@ struct App {
     pending_screenshot: bool,
     pending_new_tab: bool,
     pending_close_tab: bool,
+    annotations_visible: bool,
+    url_check_tick: u32,
 }
 
 impl App {
@@ -78,6 +80,8 @@ impl App {
             pending_screenshot: false,
             pending_new_tab: false,
             pending_close_tab: false,
+            annotations_visible: false,
+            url_check_tick: 0,
         };
 
         app.add_log(LogLevel::Info, "FairyAction Tester started. Type 'help' for available commands.");
@@ -120,9 +124,14 @@ impl App {
                     self.add_log(LogLevel::Error, "Usage: navigate <url>");
                     return;
                 }
-                match self.browser.navigate(args).await {
+                let url = if args.starts_with("http://") || args.starts_with("https://") || args.starts_with("file://") {
+                    args.to_string()
+                } else {
+                    format!("https://{}", args)
+                };
+                match self.browser.navigate(&url).await {
                     Ok(_) => {
-                        self.add_log(LogLevel::Success, &format!("Navigated to {}", args));
+                        self.add_log(LogLevel::Success, &format!("Navigated to {}", url));
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         let _ = self.refresh_dom().await;
                     }
@@ -267,8 +276,14 @@ impl App {
                 }
             }
             "tab-new" => {
-                let url_arg = if args.is_empty() { None } else { Some(args) };
-                match self.browser.new_tab(url_arg).await {
+                let url_arg = if args.is_empty() {
+                    None
+                } else if args.starts_with("http://") || args.starts_with("https://") || args.starts_with("file://") {
+                    Some(args.to_string())
+                } else {
+                    Some(format!("https://{}", args))
+                };
+                match self.browser.new_tab(url_arg.as_deref()).await {
                     Ok(_) => {
                         self.add_log(LogLevel::Success, "New tab opened");
                         let _ = self.refresh_dom().await;
@@ -355,6 +370,17 @@ impl App {
             "clear" => {
                 self.logs.clear();
                 self.add_log(LogLevel::Info, "Logs cleared");
+            }
+            "annotate" | "ann" => {
+                match DomService::toggle_annotations(&self.browser).await {
+                    Ok(visible) => {
+                        self.annotations_visible = visible;
+                        self.add_log(LogLevel::Info, if visible { "Annotations ON" } else { "Annotations OFF" });
+                    }
+                    Err(e) => {
+                        self.add_log(LogLevel::Error, &format!("Toggle annotations failed: {}", e));
+                    }
+                }
             }
             "help" | "?" => {
                 self.show_help = !self.show_help;
@@ -503,6 +529,7 @@ impl App {
             'd' => self.pending_screenshot = true,
             'n' => self.pending_new_tab = true,
             'w' => self.pending_close_tab = true,
+            't' => self.pending_command = Some("annotate".to_string()),
             _ => {}
         }
     }
@@ -542,6 +569,7 @@ fn ui(f: &mut Frame, app: &App) {
         .title(" DOM Tree (F5 refresh, PgUp/PgDn scroll) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
+    f.render_widget(Clear, middle[0]);
     let dom_paragraph = Paragraph::new(app.dom_content.clone())
         .block(dom_block)
         .wrap(Wrap { trim: false })
@@ -632,11 +660,13 @@ fn ui(f: &mut Frame, app: &App) {
             Line::from("    dom                   Refresh DOM tree"),
             Line::from("    url / title           Show current info"),
             Line::from("    clear                 Clear logs"),
+            Line::from("    annotate              Toggle element annotation overlay"),
             Line::from("    quit                  Exit tester"),
             Line::from(""),
             Line::from(Span::styled("  Shortcuts:", Style::default().add_modifier(Modifier::BOLD))),
             Line::from("    Ctrl+C  Quit    Ctrl+R  Reload    Ctrl+D  Screenshot"),
-            Line::from("    Ctrl+N  New tab Ctrl+W  Close tab F5  Refresh DOM"),
+            Line::from("    Ctrl+N  New tab Ctrl+W  Close tab Ctrl+T  Annotations"),
+            Line::from("    F5  Refresh DOM  PgUp/PgDn  Scroll DOM  Esc  Clear input"),
             Line::from("    Esc     Clear input   ?/h  Toggle help"),
         ];
         let help_block = Block::default()
@@ -762,6 +792,20 @@ async fn run_app(
                 Err(e) => app.add_log(LogLevel::Error, &format!("Close tab failed: {}", e)),
             }
             let _ = app.refresh_status().await;
+        }
+
+        {
+            app.url_check_tick = app.url_check_tick.wrapping_add(1);
+            if app.url_check_tick % 20 == 0 {
+                if let Ok(current_url) = app.browser.get_url().await {
+                    if !current_url.is_empty() && current_url != app.url {
+                        app.add_log(LogLevel::Info, &format!("URL changed: {} -> {}", app.url, current_url));
+                        app.url = current_url;
+                        let _ = app.refresh_status().await;
+                        let _ = app.refresh_dom().await;
+                    }
+                }
+            }
         }
     }
 

@@ -276,3 +276,7 @@ pub fn get_f64(params: &HashMap<String, Value>, key: &str) -> Option<f64> {
 pub fn get_bool(params: &HashMap<String, Value>, key: &str) -> bool {
     params.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
+
+pub fn get_bool_raw(params: &HashMap<String, Value>, key: &str) -> Option<bool> {
+    params.get(key).and_then(|v| v.as_bool())
+}
