@@ -24,6 +24,9 @@ struct Cli {
 
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    quiet: bool,
 }
 
 #[derive(Subcommand)]
@@ -398,17 +401,19 @@ async fn run_interactive(session: Arc<BrowserSession>, registry: Arc<Registry>) 
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let log_level = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| log_level.into()),
-        )
-        .with_target(false)
-        .init();
-
     match cli.command {
         Commands::Run { show_browser } => {
+            if !cli.quiet {
+                let log_level = if cli.verbose { "debug" } else { "info" };
+                tracing_subscriber::fmt()
+                    .with_env_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| log_level.into()),
+                    )
+                    .with_target(false)
+                    .with_writer(std::io::stderr)
+                    .init();
+            }
             let mut app_config = if let Some(config_path) = &cli.config {
                 Config::load_from_path(config_path)?
             } else {

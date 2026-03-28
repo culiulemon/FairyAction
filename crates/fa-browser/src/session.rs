@@ -625,7 +625,7 @@ impl BrowserSession {
             .as_str()
             .ok_or_else(|| BrowserError::CdpError("No targetId in createTarget response".to_string()))?;
 
-        tracing::info!("Created new tab with targetId: {}", target_id);
+        tracing::debug!("Created new tab with targetId: {}", target_id);
 
         drop(cdp);
 

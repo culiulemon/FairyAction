@@ -176,7 +176,7 @@ async fn read_loop<S>(
                         break;
                     }
                     None => {
-                        tracing::info!("CDP WebSocket stream ended");
+                        tracing::debug!("CDP WebSocket stream ended");
                         break;
                     }
                     _ => {}
