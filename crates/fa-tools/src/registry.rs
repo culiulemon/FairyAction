@@ -169,6 +169,8 @@ impl Registry {
                     None => return ActionResult::error("Missing required parameter: url"),
                 };
                 let new_tab = get_bool(&p, "new_tab");
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
 
                 let result = if new_tab {
                     ctx.session.new_tab(Some(&url)).await
@@ -177,7 +179,11 @@ impl Registry {
                 };
 
                 match result {
-                    Ok(_) => ActionResult::success(format!("Navigated to {}", url)),
+                    Ok(_) => {
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success(format!("Navigated to {}", url))
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Navigation failed: {}", e)),
                 }
             },
@@ -187,8 +193,15 @@ impl Registry {
             ActionDef::new("go_back", "Go back to the previous page in browser history.")
                 .terminates_sequence(),
             |ctx, _params| async move {
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 match ctx.session.go_back().await {
-                    Ok(_) => ActionResult::success("Navigated back"),
+                    Ok(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success("Navigated back")
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Go back failed: {}", e)),
                 }
             },
@@ -198,8 +211,15 @@ impl Registry {
             ActionDef::new("go_forward", "Go forward to the next page in browser history.")
                 .terminates_sequence(),
             |ctx, _params| async move {
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 match ctx.session.go_forward().await {
-                    Ok(_) => ActionResult::success("Navigated forward"),
+                    Ok(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success("Navigated forward")
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Go forward failed: {}", e)),
                 }
             },
@@ -209,8 +229,15 @@ impl Registry {
             ActionDef::new("reload", "Reload the current page.")
                 .terminates_sequence(),
             |ctx, _params| async move {
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 match ctx.session.reload().await {
-                    Ok(_) => ActionResult::success("Page reloaded"),
+                    Ok(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success("Page reloaded")
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Reload failed: {}", e)),
                 }
             },
@@ -233,8 +260,14 @@ impl Registry {
                     "bing" => format!("https://www.bing.com/search?q={}", urlencoding(&query)),
                     _ => format!("https://duckduckgo.com/?q={}", urlencoding(&query)),
                 };
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 match ctx.session.navigate(&url).await {
-                    Ok(_) => ActionResult::success(format!("Searched '{}' via {}", query, engine)),
+                    Ok(_) => {
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success(format!("Searched '{}' via {}", query, engine))
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Search failed: {}", e)),
                 }
             },
@@ -251,8 +284,25 @@ impl Registry {
                     Some(i) => i as usize,
                     None => return ActionResult::error("Missing required parameter: index"),
                 };
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
+
                 match ctx.session.click_element(index).await {
-                    Ok(_) => ActionResult::success(format!("Clicked element [{}]", index)),
+                    Ok(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+
+                        let mut msg = format!("Clicked element [{}]", index);
+                        if state.new_tab_opened == Some(true) {
+                            msg.push_str(" — new tab opened");
+                        }
+                        if state.navigation_occurred == Some(true) {
+                            msg.push_str(&format!(" — navigated to {}", state.url.as_deref().unwrap_or("?")));
+                        }
+
+                        ActionResult::success(msg).with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Click failed: {}", e)),
                 }
             },
@@ -274,8 +324,15 @@ impl Registry {
                     None => return ActionResult::error("Missing required parameter: text"),
                 };
                 let _clear = get_bool(&p, "clear");
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
+
                 match ctx.session.type_text(index, &text).await {
-                    Ok(_) => ActionResult::success(format!("Typed '{}' into element [{}]", text, index)),
+                    Ok(_) => {
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success(format!("Typed '{}' into element [{}]", text, index))
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Input failed: {}", e)),
                 }
             },
@@ -307,8 +364,19 @@ impl Registry {
                     Some(k) => k,
                     None => return ActionResult::error("Missing required parameter: keys"),
                 };
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
+
                 match ctx.session.send_keys(&keys).await {
-                    Ok(_) => ActionResult::success(format!("Sent keys: {}", keys)),
+                    Ok(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        let mut msg = format!("Sent keys: {}", keys);
+                        if state.navigation_occurred == Some(true) {
+                            msg.push_str(&format!(" — navigated to {}", state.url.as_deref().unwrap_or("?")));
+                        }
+                        ActionResult::success(msg).with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Send keys failed: {}", e)),
                 }
             },
@@ -354,13 +422,24 @@ impl Registry {
 
     async fn register_default_page_actions(&self) {
         self.register(
-            ActionDef::new("screenshot", "Take a screenshot of the current page or element.")
+            ActionDef::new("screenshot", "Take a screenshot of the current page. Returns base64-encoded PNG data.")
                 .optional_param("index", crate::params::ParamType::Integer, "Optional element index to screenshot (full page if omitted)", Value::Null),
             |ctx, params| async move {
                 let p = parse_action_params(&params);
                 let _index = get_i64(&p, "index");
                 match ctx.session.screenshot().await {
-                    Ok(_) => ActionResult::success("Screenshot taken"),
+                    Ok(data) => {
+                        let state = crate::params::ActionStateAfter {
+                            url: None,
+                            title: None,
+                            tab_count: None,
+                            new_tab_opened: None,
+                            navigation_occurred: None,
+                            screenshot: Some(data),
+                        };
+                        ActionResult::success("Screenshot taken")
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Screenshot failed: {}", e)),
                 }
             },
@@ -391,8 +470,14 @@ impl Registry {
                     Some(i) => i as usize,
                     None => return ActionResult::error("Missing required parameter: index"),
                 };
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 match ctx.session.switch_tab(index).await {
-                    Ok(_) => ActionResult::success(format!("Switched to tab {}", index)),
+                    Ok(_) => {
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success(format!("Switched to tab {}", index))
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("Switch tab failed: {}", e)),
                 }
             },
@@ -404,14 +489,24 @@ impl Registry {
             |ctx, params| async move {
                 let p = parse_action_params(&params);
                 let index = get_i64(&p, "index").unwrap_or(-1) as i64;
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 if index < 0 {
                     match ctx.session.close_tab(0).await {
-                        Ok(_) => ActionResult::success("Current tab closed"),
+                        Ok(_) => {
+                            let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                            ActionResult::success("Current tab closed")
+                                .with_state_after(state)
+                        }
                         Err(e) => ActionResult::error(format!("Close tab failed: {}", e)),
                     }
                 } else {
                     match ctx.session.close_tab(index as usize).await {
-                        Ok(_) => ActionResult::success(format!("Tab {} closed", index)),
+                        Ok(_) => {
+                            let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                            ActionResult::success(format!("Tab {} closed", index))
+                                .with_state_after(state)
+                        }
                         Err(e) => ActionResult::error(format!("Close tab failed: {}", e)),
                     }
                 }
@@ -424,20 +519,26 @@ impl Registry {
             |ctx, params| async move {
                 let p = parse_action_params(&params);
                 let url = get_string(&p, "url");
+                let url_before = ctx.page_url.clone();
+                let tab_count_before = ctx.session.get_tabs().await.unwrap_or_default().len();
                 let result = if let Some(u) = url {
                     ctx.session.new_tab(Some(&u)).await
                 } else {
                     ctx.session.new_tab(None).await
                 };
                 match result {
-                    Ok(_) => ActionResult::success("Opened new tab"),
+                    Ok(_) => {
+                        let state = ctx.capture_state_after(&url_before, tab_count_before).await;
+                        ActionResult::success("Opened new tab")
+                            .with_state_after(state)
+                    }
                     Err(e) => ActionResult::error(format!("New tab failed: {}", e)),
                 }
             },
         ).await;
 
         self.register(
-            ActionDef::new("evaluate", "Execute JavaScript code on the current page.")
+            ActionDef::new("evaluate", "Execute JavaScript code on the current page and return the result.")
                 .param("code", crate::params::ParamType::String, "JavaScript code to execute")
                 .terminates_sequence(),
             |ctx, params| async move {
@@ -447,7 +548,15 @@ impl Registry {
                     None => return ActionResult::error("Missing required parameter: code"),
                 };
                 match ctx.session.evaluate_js(&code).await {
-                    Ok(result) => ActionResult::success(format!("Result: {}", result["result"]["value"])),
+                    Ok(result) => {
+                        let value = &result["result"]["value"];
+                        let output = match value {
+                            Value::Null => "null".to_string(),
+                            Value::String(s) => s.clone(),
+                            other => serde_json::to_string(other).unwrap_or_else(|_| "undefined".to_string()),
+                        };
+                        ActionResult::success(format!("Result: {}", output))
+                    }
                     Err(e) => ActionResult::error(format!("Evaluate failed: {}", e)),
                 }
             },

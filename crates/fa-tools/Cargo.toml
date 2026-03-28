@@ -17,4 +17,3 @@ async-trait = { workspace = true }
 fa-browser = { workspace = true }
 fa-actor = { workspace = true }
 fa-dom = { workspace = true }
-fa-llm = { workspace = true }

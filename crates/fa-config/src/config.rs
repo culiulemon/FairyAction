@@ -18,10 +18,6 @@ pub enum ConfigError {
 pub struct Config {
     #[serde(default)]
     pub browser: BrowserConfig,
-    #[serde(default)]
-    pub llm: LlmConfig,
-    #[serde(default)]
-    pub agent: AgentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,42 +36,9 @@ pub struct BrowserConfig {
     pub user_data_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    #[serde(default = "default_provider")]
-    pub provider: String,
-    #[serde(default = "default_model")]
-    pub model: String,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub base_url: Option<String>,
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
-    #[serde(default = "default_temperature")]
-    pub temperature: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    #[serde(default = "default_max_steps")]
-    pub max_steps: u32,
-    #[serde(default = "default_max_failures")]
-    pub max_failures: u32,
-    #[serde(default = "default_use_vision")]
-    pub use_vision: bool,
-}
-
 fn default_headless() -> bool { true }
 fn default_viewport_width() -> u32 { 1280 }
 fn default_viewport_height() -> u32 { 720 }
-fn default_provider() -> String { "openai".into() }
-fn default_model() -> String { "gpt-4o".into() }
-fn default_max_tokens() -> u32 { 4096 }
-fn default_temperature() -> f32 { 0.0 }
-fn default_max_steps() -> u32 { 100 }
-fn default_max_failures() -> u32 { 5 }
-fn default_use_vision() -> bool { true }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
@@ -90,35 +53,10 @@ impl Default for BrowserConfig {
     }
 }
 
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            provider: default_provider(),
-            model: default_model(),
-            api_key: None,
-            base_url: None,
-            max_tokens: default_max_tokens(),
-            temperature: default_temperature(),
-        }
-    }
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            max_steps: default_max_steps(),
-            max_failures: default_max_failures(),
-            use_vision: default_use_vision(),
-        }
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
             browser: BrowserConfig::default(),
-            llm: LlmConfig::default(),
-            agent: AgentConfig::default(),
         }
     }
 }
@@ -188,33 +126,6 @@ impl Config {
         if let Ok(v) = std::env::var("FA_BROWSER_CHROME_PATH") {
             self.browser.chrome_path = Some(v);
         }
-        if let Ok(v) = std::env::var("FA_LLM_PROVIDER") {
-            self.llm.provider = v;
-        }
-        if let Ok(v) = std::env::var("FA_LLM_MODEL") {
-            self.llm.model = v;
-        }
-        if let Ok(v) = std::env::var("FA_LLM_API_KEY") {
-            self.llm.api_key = Some(v);
-        }
-        if let Ok(v) = std::env::var("FA_LLM_BASE_URL") {
-            self.llm.base_url = Some(v);
-        }
-        if let Ok(v) = std::env::var("FA_LLM_MAX_TOKENS") {
-            if let Ok(n) = v.parse() { self.llm.max_tokens = n; }
-        }
-        if let Ok(v) = std::env::var("FA_LLM_TEMPERATURE") {
-            if let Ok(n) = v.parse() { self.llm.temperature = n; }
-        }
-        if let Ok(v) = std::env::var("FA_AGENT_MAX_STEPS") {
-            if let Ok(n) = v.parse() { self.agent.max_steps = n; }
-        }
-        if let Ok(v) = std::env::var("FA_AGENT_MAX_FAILURES") {
-            if let Ok(n) = v.parse() { self.agent.max_failures = n; }
-        }
-        if let Ok(v) = std::env::var("FA_AGENT_USE_VISION") {
-            self.agent.use_vision = v == "true" || v == "1";
-        }
         self
     }
 
@@ -255,13 +166,8 @@ impl Config {
                 "viewport_width" => self.browser.viewport_width = value.parse::<u32>().map_err(|e| ConfigError::ParseFailed(e.to_string()))?,
                 "viewport_height" => self.browser.viewport_height = value.parse::<u32>().map_err(|e| ConfigError::ParseFailed(e.to_string()))?,
                 "chrome_path" => self.browser.chrome_path = Some(value.to_string()),
-                _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
-            },
-            ["llm", sub_key] => match *sub_key {
-                "provider" => self.llm.provider = value.to_string(),
-                "model" => self.llm.model = value.to_string(),
-                "api_key" => self.llm.api_key = Some(value.to_string()),
-                "base_url" => self.llm.base_url = Some(value.to_string()),
+                "proxy" => self.browser.proxy = Some(value.to_string()),
+                "user_data_dir" => self.browser.user_data_dir = Some(value.to_string()),
                 _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
             },
             _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
@@ -279,32 +185,22 @@ mod tests {
         let config = Config::default();
         assert!(config.browser.headless);
         assert_eq!(config.browser.viewport_width, 1280);
-        assert_eq!(config.llm.provider, "openai");
-        assert_eq!(config.llm.model, "gpt-4o");
-        assert_eq!(config.agent.max_steps, 100);
-        assert!(config.agent.use_vision);
     }
 
     #[test]
     fn test_merge_env() {
         unsafe {
-            std::env::set_var("FA_LLM_PROVIDER", "anthropic");
-            std::env::set_var("FA_LLM_MODEL", "claude-sonnet-4-20250514");
             std::env::set_var("FA_BROWSER_HEADLESS", "false");
-            std::env::set_var("FA_AGENT_MAX_STEPS", "50");
+            std::env::set_var("FA_BROWSER_VIEWPORT_WIDTH", "1920");
         }
 
         let config = Config::from_env();
-        assert_eq!(config.llm.provider, "anthropic");
-        assert_eq!(config.llm.model, "claude-sonnet-4-20250514");
         assert!(!config.browser.headless);
-        assert_eq!(config.agent.max_steps, 50);
+        assert_eq!(config.browser.viewport_width, 1920);
 
         unsafe {
-            std::env::remove_var("FA_LLM_PROVIDER");
-            std::env::remove_var("FA_LLM_MODEL");
             std::env::remove_var("FA_BROWSER_HEADLESS");
-            std::env::remove_var("FA_AGENT_MAX_STEPS");
+            std::env::remove_var("FA_BROWSER_VIEWPORT_WIDTH");
         }
     }
 
@@ -314,16 +210,13 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.browser.viewport_width, config.browser.viewport_width);
-        assert_eq!(deserialized.llm.provider, config.llm.provider);
     }
 
     #[test]
     fn test_partial_deserialize() {
-        let json = r#"{"llm":{"provider":"ollama","model":"llama3","base_url":"http://localhost:11434"}}"#;
+        let json = r#"{"browser":{"headless":false,"viewport_width":1920}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.llm.provider, "ollama");
-        assert_eq!(config.llm.model, "llama3");
-        assert_eq!(config.llm.base_url.as_deref(), Some("http://localhost:11434"));
-        assert!(config.browser.headless);
+        assert!(!config.browser.headless);
+        assert_eq!(config.browser.viewport_width, 1920);
     }
 }

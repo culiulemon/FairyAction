@@ -19,5 +19,6 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 fa-config = { workspace = true }
-fa-agent = { workspace = true }
 fa-browser = { workspace = true }
+fa-dom = { workspace = true }
+fa-tools = { workspace = true }

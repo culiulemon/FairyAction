@@ -1,11 +1,19 @@
 use clap::{Parser, Subcommand};
-use fa_agent::service::Agent;
-use fa_agent::views::AgentConfig;
+use fa_browser::profile::BrowserProfile;
+use fa_browser::session::BrowserSession;
 use fa_config::Config;
+use fa_dom::service::DomService;
+use fa_tools::actions::ActionContext;
+use fa_tools::registry::Registry;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::io::{BufRead, Write};
+use std::sync::Arc;
+use tracing::{debug, error, info};
 
 #[derive(Parser)]
 #[command(name = "fairy-action")]
-#[command(about = "FairyAction - AI-powered browser automation agent")]
+#[command(about = "FairyAction - Browser automation toolkit for AI agents")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -21,33 +29,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Run {
-        #[arg(help = "The task description for the agent")]
-        task: Vec<String>,
-
-        #[arg(short, long, help = "Maximum number of steps")]
-        max_steps: Option<usize>,
-
-        #[arg(long, help = "Enable vision (screenshots)")]
-        vision: bool,
-
-        #[arg(short, long, help = "Save execution trace to file")]
-        trace: Option<String>,
-
         #[arg(long, help = "Run in non-headless mode (show browser)")]
         show_browser: bool,
-
-        #[arg(long, help = "LLM provider override")]
-        provider: Option<String>,
-
-        #[arg(long, help = "LLM model override")]
-        model: Option<String>,
-
-        #[arg(long, help = "LLM API key override")]
-        api_key: Option<String>,
-
-        #[arg(long, help = "LLM base URL override")]
-        base_url: Option<String>,
     },
+
+    #[command(name = "list-actions")]
+    ListActions,
 
     Tester,
 
@@ -67,6 +54,309 @@ enum ConfigAction {
     },
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum Request {
+    #[serde(rename = "execute")]
+    Execute {
+        action: String,
+        params: Value,
+    },
+    #[serde(rename = "get_state")]
+    GetState,
+    #[serde(rename = "get_dom")]
+    GetDom,
+    #[serde(rename = "list_actions")]
+    ListActions,
+    #[serde(rename = "close")]
+    Close,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum Response {
+    #[serde(rename = "ok")]
+    Ok {
+        action: Option<String>,
+        result: ActionResultData,
+    },
+    #[serde(rename = "state")]
+    State {
+        url: String,
+        title: String,
+        tabs: Vec<TabInfoData>,
+        viewport: Option<ViewportData>,
+        scroll: Option<ScrollData>,
+    },
+    #[serde(rename = "dom")]
+    Dom {
+        url: String,
+        title: String,
+        representation: String,
+        element_count: usize,
+    },
+    #[serde(rename = "actions")]
+    Actions {
+        actions: Vec<ActionDefData>,
+        schema: Value,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
+    #[serde(rename = "closed")]
+    Closed,
+}
+
+#[derive(Debug, Serialize)]
+struct ActionResultData {
+    success: bool,
+    output: Option<String>,
+    error: Option<String>,
+    extracted_content: Option<String>,
+    is_done: bool,
+    state_after: Option<StateAfterData>,
+}
+
+#[derive(Debug, Serialize)]
+struct StateAfterData {
+    url: Option<String>,
+    title: Option<String>,
+    tab_count: Option<usize>,
+    new_tab_opened: Option<bool>,
+    navigation_occurred: Option<bool>,
+    screenshot: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TabInfoData {
+    id: String,
+    url: String,
+    title: String,
+    is_active: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ViewportData {
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct ScrollData {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct ActionDefData {
+    name: String,
+    description: String,
+    params: Vec<ParamDefData>,
+}
+
+#[derive(Debug, Serialize)]
+struct ParamDefData {
+    name: String,
+    param_type: String,
+    description: String,
+    required: bool,
+    default: Option<Value>,
+    enum_values: Option<Vec<String>>,
+}
+
+fn convert_action_defs(defs: &[fa_tools::params::ActionDef]) -> Vec<ActionDefData> {
+    defs.iter().map(|d| {
+        ActionDefData {
+            name: d.name.clone(),
+            description: d.description.clone(),
+            params: d.params.iter().map(|p| {
+                ParamDefData {
+                    name: p.name.clone(),
+                    param_type: p.param_type.to_json_schema_type().to_string(),
+                    description: p.description.clone(),
+                    required: p.required,
+                    default: p.default.clone(),
+                    enum_values: p.enum_values.clone(),
+                }
+            }).collect(),
+        }
+    }).collect()
+}
+
+fn action_result_to_data(r: fa_tools::params::ActionResult) -> ActionResultData {
+    ActionResultData {
+        success: r.success,
+        output: r.output,
+        error: r.error,
+        extracted_content: r.extracted_content,
+        is_done: r.is_done,
+        state_after: r.state_after.map(|s| StateAfterData {
+            url: s.url,
+            title: s.title,
+            tab_count: s.tab_count,
+            new_tab_opened: s.new_tab_opened,
+            navigation_occurred: s.navigation_occurred,
+            screenshot: s.screenshot,
+        }),
+    }
+}
+
+fn write_response(resp: &Response) {
+    let mut line = serde_json::to_string(resp).unwrap_or_else(|e| {
+        serde_json::to_string(&Response::Error { message: format!("Serialization error: {}", e) }).unwrap()
+    });
+    line.push('\n');
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = out.write_all(line.as_bytes());
+    let _ = out.flush();
+}
+
+async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &Arc<Registry>) -> Response {
+    match req {
+        Request::Execute { action, params } => {
+            debug!(action = %action, "Executing action via request");
+
+            let url = session.get_url().await.unwrap_or_default();
+            let title = session.get_title().await.unwrap_or_default();
+
+            let ctx = ActionContext::new(session.clone(), url, title);
+
+            match registry.execute(&action, params, ctx).await {
+                Ok(result) => Response::Ok {
+                    action: Some(action),
+                    result: action_result_to_data(result),
+                },
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
+            }
+        }
+
+        Request::GetState => {
+            let url = session.get_url().await.unwrap_or_default();
+            let title = session.get_title().await.unwrap_or_default();
+            let tabs = session.get_tabs().await.unwrap_or_default();
+            let tab_data: Vec<TabInfoData> = tabs.iter().map(|t| {
+                TabInfoData {
+                    id: t.id.clone(),
+                    url: t.url.clone(),
+                    title: t.title.clone(),
+                    is_active: t.is_active,
+                }
+            }).collect();
+
+            let page_info = session
+                .evaluate_js(
+                    r#"(function() { return { width: window.innerWidth, height: window.innerHeight, scrollX: window.scrollX, scrollY: window.scrollY }; })()"#,
+                )
+                .await
+                .ok()
+                .and_then(|v| {
+                    let obj = &v["result"]["value"];
+                    Some((
+                        obj["width"].as_u64()? as u32,
+                        obj["height"].as_u64()? as u32,
+                        obj["scrollX"].as_f64().unwrap_or(0.0),
+                        obj["scrollY"].as_f64().unwrap_or(0.0),
+                    ))
+                });
+
+            let (viewport, scroll) = match page_info {
+                Some((w, h, sx, sy)) => (
+                    Some(ViewportData { width: w, height: h }),
+                    Some(ScrollData { x: sx, y: sy }),
+                ),
+                None => (None, None),
+            };
+
+            Response::State {
+                url,
+                title,
+                tabs: tab_data,
+                viewport,
+                scroll,
+            }
+        }
+
+        Request::GetDom => {
+            let url = session.get_url().await.unwrap_or_default();
+            let title = session.get_title().await.unwrap_or_default();
+
+            match DomService::get_dom_state(session).await {
+                Ok(dom_state) => {
+                    let element_count = dom_state.selector_map.len();
+                    Response::Dom {
+                        url,
+                        title,
+                        representation: dom_state.llm_representation,
+                        element_count,
+                    }
+                }
+                Err(e) => Response::Error {
+                    message: format!("Failed to get DOM: {}", e),
+                },
+            }
+        }
+
+        Request::ListActions => {
+            let defs = registry.action_definitions().await;
+            let schema = registry.get_action_schema().await;
+            Response::Actions {
+                actions: convert_action_defs(&defs),
+                schema,
+            }
+        }
+
+        Request::Close => {
+            Response::Closed
+        }
+    }
+}
+
+async fn run_interactive(session: Arc<BrowserSession>, registry: Arc<Registry>) {
+    info!("Interactive mode started. Waiting for JSON requests on stdin...");
+
+    let stdin = std::io::stdin();
+    let reader = stdin.lock();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to read stdin: {}", e);
+                break;
+            }
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let req: Request = match serde_json::from_str(trimmed) {
+            Ok(r) => r,
+            Err(e) => {
+                write_response(&Response::Error {
+                    message: format!("Invalid JSON request: {}", e),
+                });
+                continue;
+            }
+        };
+
+        if matches!(req, Request::Close) {
+            write_response(&Response::Closed);
+            break;
+        }
+
+        let resp = handle_request(req, &session, &registry).await;
+        write_response(&resp);
+    }
+
+    info!("Interactive session ended");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -81,22 +371,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match cli.command {
-        Commands::Run {
-            task,
-            max_steps,
-            vision,
-            trace,
-            show_browser,
-            provider,
-            model,
-            api_key,
-            base_url,
-        } => {
-            let task_str = task.join(" ");
-            if task_str.is_empty() {
-                anyhow::bail!("Task description is required. Usage: fairy-action run \"your task\"");
-            }
-
+        Commands::Run { show_browser } => {
             let mut app_config = if let Some(config_path) = &cli.config {
                 Config::load_from_path(config_path)?
             } else {
@@ -106,50 +381,29 @@ async fn main() -> anyhow::Result<()> {
             if show_browser {
                 app_config.browser.headless = false;
             }
-            if let Some(p) = provider {
-                app_config.llm.provider = p;
-            }
-            if let Some(m) = model {
-                app_config.llm.model = m;
-            }
-            if let Some(k) = api_key {
-                app_config.llm.api_key = Some(k);
-            }
-            if let Some(u) = base_url {
-                app_config.llm.base_url = Some(u);
-            }
 
-            let agent_config = AgentConfig {
-                max_steps: max_steps.unwrap_or(100),
-                max_actions_per_step: 10,
-                use_vision: vision,
-                save_trace: trace.is_some(),
-                trace_path: trace.unwrap_or_else(|| "trace.jsonl".to_string()),
-            };
+            let profile = BrowserProfile::from_config(&app_config.browser);
+            let session = BrowserSession::new(profile)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to create browser session: {}", e))?;
+            let session = Arc::new(session);
 
-            let mut agent = Agent::new(&task_str, agent_config, &app_config).await?;
+            let registry = Arc::new(Registry::new());
+            registry.register_default_actions().await;
 
-            let ctrl_c = tokio::signal::ctrl_c();
-            tokio::select! {
-                result = agent.run() => {
-                    match result {
-                        Ok(step_result) => {
-                            if let Some(output) = &step_result.final_output {
-                                println!("\n✓ Task completed: {}", output);
-                            } else if let Some(error) = &step_result.error {
-                                println!("\n✗ Task failed: {}", error);
-                            }
-                            println!("Steps: {}", agent.step_count());
-                        }
-                        Err(e) => {
-                            eprintln!("Agent error: {}", e);
-                        }
-                    }
-                }
-                _ = ctrl_c => {
-                    println!("\nInterrupted by user. Shutting down...");
-                }
-            }
+            run_interactive(session, registry).await;
+        }
+
+        Commands::ListActions => {
+            let registry = Registry::new();
+            registry.register_default_actions().await;
+            let defs = registry.action_definitions().await;
+            let schema = registry.get_action_schema().await;
+            let output = json!({
+                "actions": convert_action_defs(&defs),
+                "schema": schema,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
         }
 
         Commands::Tester => {

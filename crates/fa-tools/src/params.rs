@@ -164,6 +164,24 @@ pub struct ActionResult {
     pub extracted_content: Option<String>,
     pub extracted_links: Option<Vec<String>>,
     pub extracted_images: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_after: Option<ActionStateAfter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionStateAfter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_tab_opened: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navigation_occurred: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
 }
 
 impl ActionResult {
@@ -177,6 +195,7 @@ impl ActionResult {
             extracted_content: None,
             extracted_links: None,
             extracted_images: None,
+            state_after: None,
         }
     }
 
@@ -190,6 +209,7 @@ impl ActionResult {
             extracted_content: None,
             extracted_links: None,
             extracted_images: None,
+            state_after: None,
         }
     }
 
@@ -203,6 +223,7 @@ impl ActionResult {
             extracted_content: None,
             extracted_links: None,
             extracted_images: None,
+            state_after: None,
         }
     }
 
@@ -216,12 +237,18 @@ impl ActionResult {
             extracted_content: Some(content.into()),
             extracted_links: None,
             extracted_images: None,
+            state_after: None,
         }
     }
 
     pub fn with_memory(mut self, output: impl Into<String>) -> Self {
         self.include_in_memory = true;
         self.output = Some(output.into());
+        self
+    }
+
+    pub fn with_state_after(mut self, state: ActionStateAfter) -> Self {
+        self.state_after = Some(state);
         self
     }
 }

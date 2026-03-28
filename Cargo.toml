@@ -5,8 +5,6 @@ members = [
     "crates/fa-browser",
     "crates/fa-dom",
     "crates/fa-actor",
-    "crates/fa-llm",
-    "crates/fa-agent",
     "crates/fa-tools",
     "crates/fa-tester",
     "crates/fa-cli",
@@ -43,6 +41,4 @@ fa-config = { path = "crates/fa-config" }
 fa-browser = { path = "crates/fa-browser" }
 fa-dom = { path = "crates/fa-dom" }
 fa-actor = { path = "crates/fa-actor" }
-fa-llm = { path = "crates/fa-llm" }
-fa-agent = { path = "crates/fa-agent" }
 fa-tools = { path = "crates/fa-tools" }

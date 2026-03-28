@@ -1,16 +1,17 @@
 # FairyAction
 
-AI 驱动的浏览器自动化 Agent，使用 Rust 构建。通过自然语言描述任务，AI 自动控制浏览器完成操作。
+AI Agent 的浏览器自动化基础设施，使用 Rust 构建。提供精细的浏览器控制能力，通过 JSON 协议暴露所有动作接口，供外部 AI Agent 调用。
 
 ## 特性
 
-- 🤖 **AI Agent** — 基于 LLM 的感知-决策-行动循环，自动完成复杂浏览器任务
-- 🖥️ **TUI 测试器** — 交互式终端界面，实时查看 DOM 树、操控浏览器
-- 🌐 **CDP 控制** — 通过 Chrome DevTools Protocol 精确控制 Chromium 浏览器
-- 📐 **智能 DOM 提取** — 扁平化 DOM 表示，自动识别可交互元素，支持 `cursor: pointer` 检测
-- 🔄 **多标签页管理** — 自动检测新标签页、切换 CDP 连接
-- 🎯 **真实鼠标事件** — 模拟真实用户点击，支持 Vue/React 等前端框架
-- 🔌 **OpenAI 兼容** — 支持所有兼容 OpenAI API 的 LLM 服务
+- **JSON 协议接口** — 通过 stdin/stdout 交互，外部 Agent 发送 JSON 指令即可控制浏览器
+- **20 个内置动作** — 导航、点击、输入、滚动、标签页管理、文件操作等完整覆盖
+- **动作自省** — 支持动态查询所有可用动作及 JSON Schema，方便 Agent 自适应集成
+- **CDP 控制** — 通过 Chrome DevTools Protocol 精确控制 Chromium 浏览器
+- **智能 DOM 提取** — 扁平化 DOM 表示，自动识别可交互元素，支持 `cursor: pointer` 检测
+- **真实鼠标事件** — 模拟真实用户点击，支持 Vue/React 等前端框架
+- **多标签页管理** — 自动检测新标签页、切换 CDP 连接
+- **TUI 测试器** — 交互式终端界面，实时查看 DOM 树、手动操控浏览器
 
 ## 快速开始
 
@@ -32,48 +33,16 @@ cargo build --release
 创建 `.env` 文件或在 `~/.config/fairy-action/config.json` 中配置：
 
 ```bash
-# 浏览器配置
 FA_BROWSER_CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
-
-# LLM 配置
-FA_LLM_API_KEY=sk-your-api-key
-FA_LLM_MODEL=gpt-4o
-FA_LLM_BASE_URL=https://api.openai.com/v1
+FA_BROWSER_HEADLESS=true
 ```
 
 也可以通过 CLI 管理：
 
 ```bash
-fairy-action config init                    # 初始化配置文件
-fairy-action config show                    # 查看当前配置
-fairy-action config set llm.api-key sk-xxx  # 设置 API Key
-```
-
-### 运行 AI Agent
-
-```bash
-# 自动模式 — AI 完成任务
-fairy-action run "打开百度搜索 Rust 编程语言" --show-browser
-
-# 指定模型和步数
-fairy-action run "在 GitHub 上搜索 Rust 项目" \
-  --model gpt-4o \
-  --max-steps 50 \
-  --show-browser
-
-# 启用视觉模式（截图）
-fairy-action run "查看今日新闻" --vision --show-browser
-
-# 保存执行追踪
-fairy-action run "爬取数据" --trace trace.jsonl --show-browser
-```
-
-### 启动 TUI 测试器
-
-```bash
-fairy-action tester
-# 或
-cargo run --bin fa-tester
+fairy-action config init                          # 初始化配置文件
+fairy-action config show                          # 查看当前配置
+fairy-action config set browser.headless false    # 显示浏览器窗口
 ```
 
 ## CLI 命令
@@ -88,121 +57,126 @@ Options:
   -V, --version           显示版本
 
 Commands:
-  run       运行 AI Agent 执行任务
-  tester    启动交互式 TUI 测试器
-  config    配置管理
+  run              启动浏览器，通过 stdin/stdout JSON 协议接收动作指令
+  list-actions     列出所有可用动作及其参数定义
+  tester           启动交互式 TUI 测试器
+  config           配置管理
 ```
 
-### `run` 子命令
+## JSON 协议接口
 
-```
-fairy-action run <TASK> [OPTIONS]
+### 启动
 
-参数:
-  <TASK>                    任务描述
-
-Options:
-  -s, --max-steps <N>       最大步数 (默认 100)
-  --vision                  启用视觉 (截图)
-  -t, --trace <FILE>        保存执行追踪
-  --show-browser            显示浏览器窗口
-  --provider <PROVIDER>     LLM 提供商
-  --model <MODEL>           LLM 模型
-  --api-key <KEY>           API Key
-  --base-url <URL>          LLM Base URL
+```bash
+fairy-action run
+fairy-action run --show-browser    # 显示浏览器窗口
 ```
 
-### `config` 子命令
+启动后，FairyAction 通过 **stdin** 接收 JSON 请求，通过 **stdout** 返回 JSON 响应。
+
+### 请求格式
+
+```jsonc
+// 执行动作
+{"type": "execute", "action": "navigate", "params": {"url": "https://example.com"}}
+
+// 获取浏览器状态
+{"type": "get_state"}
+
+// 获取当前页面 DOM
+{"type": "get_dom"}
+
+// 列出可用动作
+{"type": "list_actions"}
+
+// 关闭浏览器
+{"type": "close"}
+```
+
+### 响应格式
+
+```jsonc
+// 动作执行结果
+{"type": "ok", "action": "navigate", "result": {"success": true, "output": "Navigated to https://example.com"}}
+
+// 动作执行失败
+{"type": "ok", "action": "click", "result": {"success": false, "output": null, "error": "Element with index 99 not found"}}
+
+// 浏览器状态
+{"type": "state", "url": "https://example.com", "title": "Example", "tabs": [{"id": "...", "url": "...", "title": "...", "is_active": true}]}
+
+// DOM 内容
+{"type": "dom", "representation": "[0] <button> \"Submit\"\n[1] input placeholder=\"Search\"\n...", "element_count": 42}
+
+// 动作列表（含 JSON Schema）
+{"type": "actions", "actions": [...], "schema": {...}}
+
+// 错误
+{"type": "error", "message": "Unknown action: 'xxx'"}
+
+// 关闭确认
+{"type": "closed"}
+```
+
+### 集成示例
+
+外部 AI Agent 的典型集成流程：
 
 ```
-fairy-action config <ACTION>
-
-Actions:
-  show                      显示当前配置
-  init                      初始化配置文件
-  set <KEY> <VALUE>         设置配置项
+1. 启动 fairy-action run 进程
+2. 发送 {"type": "list_actions"} 获取可用动作
+3. 发送 {"type": "get_dom"} 获取页面 DOM
+4. 根据任务需求，发送 {"type": "execute", "action": "click", "params": {"index": 5}} 执行操作
+5. 重复 3-4 直到任务完成
+6. 发送 {"type": "close"} 关闭浏览器
 ```
 
-## TUI 测试器命令
+## 可用动作（共 20 个）
 
-启动后进入交互式终端界面，支持以下命令：
+### 导航类
 
-### 导航
-
-| 命令 | 用法 | 说明 |
+| 动作 | 参数 | 说明 |
 |---|---|---|
-| `navigate` | `navigate https://example.com` | 导航到 URL |
-| `back` | `back` | 浏览器后退 |
-| `forward` | `forward` | 浏览器前进 |
-| `reload` | `reload` | 刷新页面 |
+| `navigate` | `url` (必填), `new_tab` (可选) | 导航到 URL |
+| `go_back` | — | 浏览器后退 |
+| `go_forward` | — | 浏览器前进 |
+| `reload` | — | 刷新页面 |
+| `search` | `query` (必填), `engine` (可选, 默认 duckduckgo) | 搜索引擎搜索 |
 
-### 交互
+### 交互类
 
-| 命令 | 用法 | 说明 |
+| 动作 | 参数 | 说明 |
 |---|---|---|
-| `click` | `click 5` | 点击指定索引的元素 |
-| `input` | `input 3 hello world` | 在元素中输入文本 |
-| `scroll` | `scroll down 500` | 滚动页面（up/down + 像素） |
-| `press` | `press Enter` | 发送按键 |
-| `eval` | `eval document.title` | 执行 JavaScript |
+| `click` | `index` (必填) | 点击指定索引的元素 |
+| `input` | `index` (必填), `text` (必填), `clear` (可选) | 向元素输入文本 |
+| `scroll` | `direction` (可选, 默认 down), `amount` (可选) | 滚动页面 |
+| `send_keys` | `keys` (必填) | 发送按键（如 `Enter`, `Control+a`） |
+| `select_option` | `index` (必填), `value` (必填) | 选择下拉选项 |
 
-### 标签页
+### 页面类
 
-| 命令 | 用法 | 说明 |
+| 动作 | 参数 | 说明 |
 |---|---|---|
-| `tab-new` | `tab-new https://example.com` | 打开新标签页 |
-| `tab-switch` | `tab-switch 0` | 切换到指定标签页 |
-| `tab-close` | `tab-close 1` | 关闭指定标签页 |
+| `screenshot` | `index` (可选) | 截取页面/元素截图 |
+| `extract` | `query` (可选) | 提取页面文本内容 |
+| `switch_tab` | `index` (必填) | 切换标签页 |
+| `close_tab` | `index` (可选) | 关闭标签页 |
+| `new_tab` | `url` (可选) | 打开新标签页 |
+| `evaluate` | `code` (必填) | 执行 JavaScript |
 
-### 其他
+### 文件类
 
-| 命令 | 别名 | 用法 | 说明 |
-|---|---|---|---|
-| `screenshot` | `ss` | `screenshot` | 截取屏幕截图 |
-| `dom` | — | `dom` | 刷新 DOM 树 |
-| `find` | — | `find 关键词` | 在页面中搜索文本 |
-| `url` | — | `url` | 显示当前 URL |
-| `title` | — | `title` | 显示页面标题 |
-| `clear` | — | `clear` | 清除日志 |
-| `help` | `?` | `help` | 切换帮助面板 |
-| `quit` | `exit` | `quit` | 退出 |
+| 动作 | 参数 | 说明 |
+|---|---|---|
+| `save_to_file` | `file_name` (必填), `content` (必填) | 保存文件 |
+| `read_file` | `file_name` (必填) | 读取文件 |
 
-### 快捷键
+### 元动作
 
-| 快捷键 | 功能 |
-|---|---|
-| `F5` | 刷新 DOM 树 |
-| `Ctrl+R` | 刷新页面 |
-| `Ctrl+D` | 截图 |
-| `Ctrl+N` | 新标签页 |
-| `Ctrl+W` | 关闭标签页 |
-| `Ctrl+C` | 退出 |
-| `PageUp / PageDown` | 滚动 DOM 树视图 |
-| `Shift + ↑/↓` | DOM 树逐行滚动 |
-| `Shift + Home/End` | DOM 树跳到顶部/底部 |
-| `Esc` | 清空命令输入 |
-
-### TUI 界面布局
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  FairyAction Tester  https://example.com | Page Title            │
-├────────────────────────────────────────┬─────────────────────────┤
-│                                        │  Status                 │
-│  DOM Tree (F5 refresh, PgUp/PgDn)     │  URL: ...               │
-│                                        │  Title: ...             │
-│  [0] <a href="/home"> "Home"          │  Tab: 1/3               │
-│  [1] <button> "Submit"                │                         │
-│  [2] input placeholder="Search"       ├─────────────────────────┤
-│  [3] <a href="/about"> "About"        │  Log                    │
-│  ...                                   │  > Clicked element [1]  │
-│                                        │  > Navigated to: ...    │
-│                                        │  > DOM refreshed: 42    │
-│                                        │  > interactive elements │
-├────────────────────────────────────────┴─────────────────────────┤
-│  Command (type 'help' for commands) > _                           │
-└──────────────────────────────────────────────────────────────────┘
-```
+| 动作 | 参数 | 说明 |
+|---|---|---|
+| `wait` | `seconds` (可选, 默认 3, 最大 30) | 等待 |
+| `done` | `text` (必填), `success` (可选) | 标记任务完成 |
 
 ## 配置参考
 
@@ -217,78 +191,112 @@ Actions:
 | `FA_BROWSER_VIEWPORT_HEIGHT` | `720` | 视口高度 |
 | `FA_BROWSER_CHROME_PATH` | 自动检测 | Chrome 可执行文件路径 |
 | `FA_BROWSER_PROXY` | — | 代理地址 |
+| `FA_BROWSER_USER_DATA_DIR` | — | 用户数据目录 |
 
-### LLM 配置
+## TUI 测试器
 
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `FA_LLM_PROVIDER` | `openai` | LLM 提供商 |
-| `FA_LLM_MODEL` | `gpt-4o` | 模型名称 |
-| `FA_LLM_API_KEY` | — | API Key |
-| `FA_LLM_BASE_URL` | — | API Base URL（兼容 OpenAI 格式即可） |
-| `FA_LLM_MAX_TOKENS` | `4096` | 最大输出 token |
-| `FA_LLM_TEMPERATURE` | `0.0` | 温度 |
-
-### Agent 配置
-
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `FA_AGENT_MAX_STEPS` | `100` | 最大执行步数 |
-| `FA_AGENT_MAX_FAILURES` | `5` | 最大连续失败次数 |
-| `FA_AGENT_USE_VISION` | `true` | 启用视觉（截图） |
-
-## Agent 工作原理
-
-Agent 采用经典的 **感知 → 决策 → 行动** 循环：
-
-```
-┌─────────────────────────────────────┐
-│  每一步:                             │
-│                                     │
-│  1. 感知 (Perceive)                  │
-│     └─ 获取页面 DOM 状态 + 截图      │
-│                                     │
-│  2. 决策 (Decide)                    │
-│     └─ 调用 LLM 分析状态并输出动作   │
-│                                     │
-│  3. 行动 (Act)                       │
-│     └─ 执行 LLM 返回的浏览器操作     │
-│                                     │
-│  4. 循环检测                         │
-│     └─ 检测重复状态避免死循环         │
-│                                     │
-│  5. 判断完成或继续                    │
-└─────────────────────────────────────┘
+```bash
+fairy-action tester
+# 或
+cargo run --bin fa-tester
 ```
 
-### 支持的 Agent 动作（共 20 个）
+启动后进入交互式终端界面，支持以下命令：
 
-**导航类**: `navigate` `go_back` `go_forward` `reload` `search`
+### 命令列表
 
-**交互类**: `click` `input` `scroll` `send_keys` `select_option`
+| 命令 | 用法 | 说明 |
+|---|---|---|
+| `navigate` | `navigate https://example.com` | 导航到 URL |
+| `back` | `back` | 浏览器后退 |
+| `forward` | `forward` | 浏览器前进 |
+| `reload` | `reload` | 刷新页面 |
+| `click` | `click 5` | 点击指定索引的元素 |
+| `input` | `input 3 hello world` | 在元素中输入文本 |
+| `scroll` | `scroll down 500` | 滚动页面（up/down + 像素） |
+| `press` | `press Enter` | 发送按键 |
+| `eval` | `eval document.title` | 执行 JavaScript |
+| `tab-new` | `tab-new https://example.com` | 打开新标签页 |
+| `tab-switch` | `tab-switch 0` | 切换到指定标签页 |
+| `tab-close` | `tab-close 1` | 关闭指定标签页 |
+| `screenshot` | `screenshot` | 截取屏幕截图 |
+| `dom` | `dom` | 刷新 DOM 树 |
+| `find` | `find 关键词` | 在页面中搜索文本 |
+| `url` | `url` | 显示当前 URL |
+| `title` | `title` | 显示页面标题 |
+| `clear` | `clear` | 清除日志 |
+| `help` | `help` | 切换帮助面板 |
+| `quit` | `quit` | 退出 |
 
-**页面类**: `screenshot` `extract` `switch_tab` `close_tab` `new_tab` `evaluate`
+### 快捷键
 
-**文件类**: `save_to_file` `read_file`
+| 快捷键 | 功能 |
+|---|---|
+| `F5` | 刷新 DOM 树 |
+| `Ctrl+R` | 刷新页面 |
+| `Ctrl+D` | 截图 |
+| `Ctrl+N` | 新标签页 |
+| `Ctrl+W` | 关闭标签页 |
+| `Ctrl+C` | 退出 |
+| `PageUp / PageDown` | 滚动 DOM 树视图 |
+| `Shift + Up/Down` | DOM 树逐行滚动 |
+| `Shift + Home/End` | DOM 树跳到顶部/底部 |
+| `Esc` | 清空命令输入 |
 
-**元动作**: `wait` `done`
+### TUI 界面布局
+
+```
++--------------------------------------------------------------------+
+|  FairyAction Tester  https://example.com | Page Title               |
++----------------------------------------+---------------------------+
+|                                        |  Status                    |
+|  DOM Tree (F5 refresh, PgUp/PgDn)     |  URL: ...                  |
+|                                        |  Title: ...                |
+|  [0] <a href="/home"> "Home"          |  Tab: 1/3                  |
+|  [1] <button> "Submit"                |                            |
+|  [2] input placeholder="Search"       +---------------------------+
+|  [3] <a href="/about"> "About"        |  Log                       |
+|  ...                                   |  > Clicked element [1]     |
+|                                        |  > Navigated to: ...       |
+|                                        |  > DOM refreshed: 42       |
+|                                        |  > interactive elements    |
++----------------------------------------+---------------------------+
+|  Command (type 'help' for commands) > _                          |
++--------------------------------------------------------------------+
+```
 
 ## 项目结构
 
 ```
 FairyAction/
-├── crates/
-│   ├── fa-cli/        # CLI 入口 (clap)
-│   ├── fa-tester/     # TUI 测试器 (ratatui + crossterm)
-│   ├── fa-agent/      # AI Agent 核心循环
-│   ├── fa-browser/    # 浏览器控制 (CDP WebSocket)
-│   ├── fa-dom/        # DOM 解析与序列化
-│   ├── fa-actor/      # 页面元素操作
-│   ├── fa-llm/        # LLM 集成 (OpenAI 兼容)
-│   ├── fa-tools/      # 工具注册与执行引擎
-│   └── fa-config/     # 配置管理
-├── .env               # 环境变量配置
-└── Cargo.toml         # Workspace 根配置
++-- crates/
+|   +-- fa-cli/        # CLI 入口 (clap), JSON 协议接口
+|   +-- fa-tester/     # TUI 测试器 (ratatui + crossterm)
+|   +-- fa-browser/    # 浏览器控制 (CDP WebSocket)
+|   +-- fa-dom/        # DOM 解析与序列化
+|   +-- fa-actor/      # 页面元素操作抽象 (Page/Element/Mouse)
+|   +-- fa-tools/      # 动作注册表与执行引擎
+|   +-- fa-config/     # 配置管理
++-- .env               # 环境变量配置
++-- Cargo.toml         # Workspace 根配置
+```
+
+### 依赖关系
+
+```
+fa-cli
+  +-- fa-config
+  +-- fa-browser
+  +-- fa-dom
+  +-- fa-tools
+      +-- fa-browser
+      +-- fa-actor
+      +-- fa-dom
+
+fa-tester
+  +-- fa-config
+  +-- fa-browser
+  +-- fa-dom
 ```
 
 ## 技术栈

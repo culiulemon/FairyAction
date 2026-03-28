@@ -404,25 +404,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fa-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "fa-actor",
- "fa-browser",
- "fa-config",
- "fa-dom",
- "fa-llm",
- "fa-tools",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "fa-browser"
 version = "0.1.0"
 dependencies = [
@@ -446,9 +427,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "fa-agent",
  "fa-browser",
  "fa-config",
+ "fa-dom",
+ "fa-tools",
  "serde",
  "serde_json",
  "tokio",
@@ -474,22 +456,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fa-browser",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "fa-llm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "fa-config",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -524,7 +490,6 @@ dependencies = [
  "fa-actor",
  "fa-browser",
  "fa-dom",
- "fa-llm",
  "serde",
  "serde_json",
  "thiserror",
