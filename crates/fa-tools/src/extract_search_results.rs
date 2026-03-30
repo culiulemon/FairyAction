@@ -45,7 +45,11 @@ pub fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> 
 
 pub fn format_search_results(query: &str, engine: &str, results: &[SearchResultItem]) -> String {
     if results.is_empty() {
-        return format!("No search results found for \"{}\" via {}.", query, engine);
+        return format!(
+            "No search results found for \"{}\" via {}.\nDebug: Check if the page loaded correctly and selectors are working.",
+            query,
+            engine
+        );
     }
 
     let mut output = format!(
@@ -130,13 +134,30 @@ const BING_JS: &str = r#"
   });
   var results = [];
   var containers = document.querySelectorAll('#b_results .b_algo');
+  if (containers.length === 0) {
+    containers = document.querySelectorAll('.b_algo');
+  }
+  if (containers.length === 0) {
+    var mainResults = document.querySelector('#b_results');
+    if (mainResults) {
+      containers = mainResults.querySelectorAll('li, article, [class*="result"]');
+    }
+  }
   for (var i = 0; i < containers.length; i++) {
     var el = containers[i];
-    var h2a = el.querySelector('h2 a');
-    var title = h2a ? h2a.textContent.trim() : '';
+    var titleSelectors = ['h2 a', 'h3 a', 'h1 a', '.b_title a', '[class*="title"] a', 'a[href]'];
+    var title = '';
     var url = '';
-    if (h2a) {
-      var href = h2a.getAttribute('href') || '';
+    var titleLink = null;
+    for (var s = 0; s < titleSelectors.length; s++) {
+      var link = el.querySelector(titleSelectors[s]);
+      if (link && link.textContent.trim() && (titleLink === null || link.textContent.trim().length > titleLink.textContent.trim().length)) {
+        titleLink = link;
+        title = link.textContent.trim();
+      }
+    }
+    if (titleLink) {
+      var href = titleLink.getAttribute('href') || '';
       if (href.indexOf('/ck/a?u=') !== -1) {
         var match = href.match(/[?&]u=([^&]*)/);
         if (match) {
@@ -151,14 +172,16 @@ const BING_JS: &str = r#"
       } else {
         url = href;
       }
+      if (url && !url.startsWith('http') && !url.startsWith('/')) {
+        url = window.location.origin + url;
+      }
     }
     var snippet = '';
-    var snippetSelectors = ['.b_caption p', '.b_snippet', '.lisn_content'];
+    var snippetSelectors = ['.b_caption p', '.b_snippet', '.lisn_content', '.sb_add', 'p', '[class*="snippet"]', '[class*="desc"]'];
     for (var s = 0; s < snippetSelectors.length; s++) {
       var sn = el.querySelector(snippetSelectors[s]);
-      if (sn && sn.textContent.trim()) {
+      if (sn && sn.textContent.trim() && sn.textContent.trim().length > snippet.length) {
         snippet = sn.textContent.trim();
-        break;
       }
     }
     if (title && url) {
@@ -280,7 +303,8 @@ mod tests {
     fn test_format_search_results_empty() {
         let results: Vec<SearchResultItem> = vec![];
         let output = format_search_results("test query", "google", &results);
-        assert_eq!(output, "No search results found for \"test query\" via google.");
+        assert!(output.starts_with("No search results found for \"test query\" via google."));
+        assert!(output.contains("Debug: Check if the page loaded correctly"));
     }
 
     #[test]

@@ -281,13 +281,26 @@ impl Registry {
                     Ok(_) => {
                         let state = ctx.capture_state_after(&url_before, tab_count_before).await;
                         let js = crate::extract_search_results::get_extraction_js(&engine);
-                        let results = match ctx.session.evaluate_js(js).await {
-                            Ok(value) => crate::extract_search_results::parse_search_results(&value),
-                            Err(_) => Vec::new(),
+                        let (results, debug_info) = match ctx.session.evaluate_js(js).await {
+                            Ok(value) => {
+                                let parsed = crate::extract_search_results::parse_search_results(&value);
+                                if parsed.is_empty() {
+                                    (parsed, format!(" (extracted {} items, page may have different structure)", value.get("result").and_then(|r| r.get("value")).and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0)))
+                                } else {
+                                    (parsed, String::new())
+                                }
+                            }
+                            Err(e) => (Vec::new(), format!(" (JS evaluation failed: {})", e)),
                         };
                         let formatted = crate::extract_search_results::format_search_results(&query, &engine, &results);
+                        let formatted_with_debug = if results.is_empty() {
+                            format!("{}\nDebug info: visited {}, JS extraction{}",
+                                formatted, state.url.as_deref().unwrap_or(&url), debug_info)
+                        } else {
+                            formatted
+                        };
                         let links = crate::extract_search_results::extract_links(&results);
-                        ActionResult::extracted_with_links(formatted, links)
+                        ActionResult::extracted_with_links(formatted_with_debug, links)
                             .with_state_after(state)
                     }
                     Err(e) => ActionResult::error(format!("Search failed: {}", e)),
@@ -459,6 +472,7 @@ impl Registry {
                             new_tab_opened: None,
                             navigation_occurred: None,
                             screenshot: Some(data),
+                            screenshot_path: None,
                         };
                         ActionResult::success("Screenshot taken")
                             .with_state_after(state)
@@ -653,6 +667,35 @@ impl Registry {
     }
 
     async fn register_default_meta_actions(&self) {
+        self.register(
+            ActionDef::new("start", "Start the browser or check if it is already running. Returns browser status without restarting if already active.")
+                .optional_param("show_browser", crate::params::ParamType::Boolean, "Whether to show the browser window (non-headless mode)", Value::Bool(false)),
+            |ctx, params| async move {
+                let p = parse_action_params(&params);
+                let _show_browser = get_bool(&p, "show_browser");
+
+                if ctx.session.is_running().await {
+                    let url = ctx.session.get_url().await.unwrap_or_default();
+                    let title = ctx.session.get_title().await.unwrap_or_default();
+                    let tabs = ctx.session.get_tabs().await.unwrap_or_default();
+                    let tab_info: Vec<String> = tabs.iter().enumerate().map(|(i, t)| {
+                        let _active = if t.is_active { " (active)" } else { "" };
+                        format!("[{}] {} — {}", i, t.title, t.url)
+                    }).collect();
+                    let output = format!(
+                        "浏览器已启动\n当前页面: {}\n标题: {}\n标签页数量: {}\n标签页列表:\n{}",
+                        url,
+                        title,
+                        tabs.len(),
+                        if tab_info.is_empty() { "  (无)".to_string() } else { tab_info.iter().map(|t| format!("  {}", t)).collect::<Vec<_>>().join("\n") }
+                    );
+                    ActionResult::success(output)
+                } else {
+                    ActionResult::error("浏览器未运行，无法启动（浏览器在程序启动时自动创建）")
+                }
+            },
+        ).await;
+
         self.register(
             ActionDef::new("wait", "Wait for a specified duration before the next action.")
                 .optional_param("seconds", crate::params::ParamType::Integer, "Number of seconds to wait (max 30)", Value::Number(serde_json::Number::from(3))),

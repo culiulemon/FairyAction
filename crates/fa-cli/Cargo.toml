@@ -18,6 +18,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 fa-config = { workspace = true }
 fa-browser = { workspace = true }
 fa-dom = { workspace = true }

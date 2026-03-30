@@ -706,6 +706,18 @@ impl BrowserSession {
         })
     }
 
+    pub async fn is_running(&self) -> bool {
+        let url = format!("http://localhost:{}/json/version", self.port);
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+    }
+
     pub async fn close(mut self) {
         if let Some(pid) = self.process_id.take() {
             tracing::info!("Closing browser process (PID: {})", pid);

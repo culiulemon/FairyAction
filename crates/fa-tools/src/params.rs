@@ -182,6 +182,8 @@ pub struct ActionStateAfter {
     pub navigation_occurred: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
 }
 
 impl ActionResult {

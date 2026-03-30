@@ -40,6 +40,7 @@ impl ActionContext {
             new_tab_opened: if new_tab_opened { Some(true) } else { None },
             navigation_occurred: if navigation_occurred { Some(true) } else { None },
             screenshot: None,
+            screenshot_path: None,
         }
     }
 }
