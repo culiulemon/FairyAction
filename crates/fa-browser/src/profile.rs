@@ -17,7 +17,7 @@ pub struct BrowserProfile {
 impl Default for BrowserProfile {
     fn default() -> Self {
         Self {
-            headless: true,
+            headless: false,
             viewport_width: 1280,
             viewport_height: 720,
             proxy: None,

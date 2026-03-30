@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SEARCH_ENGINE: &str = "bing";
 
-pub const SEARCH_ENGINES: &[&str] = &["google", "bing", "baidu", "duckduckgo"];
+pub const SEARCH_ENGINES: &[&str] = &["bing", "baidu", "google", "duckduckgo"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResultItem {
@@ -73,7 +73,15 @@ pub fn extract_links(results: &[SearchResultItem]) -> Vec<String> {
 }
 
 const GOOGLE_JS: &str = r#"
-(function() {
+(async function() {
+  await new Promise(function(resolve) {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      var els = document.querySelectorAll('#search .MjjYud');
+      if (els.length > 0 || attempts > 40) { clearInterval(timer); resolve(); }
+      attempts++;
+    }, 200);
+  });
   var results = [];
   var containers = document.querySelectorAll('#search .MjjYud');
   for (var i = 0; i < containers.length; i++) {
@@ -111,7 +119,15 @@ const GOOGLE_JS: &str = r#"
 "#;
 
 const BING_JS: &str = r#"
-(function() {
+(async function() {
+  await new Promise(function(resolve) {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      var els = document.querySelectorAll('#b_results .b_algo');
+      if (els.length > 0 || attempts > 40) { clearInterval(timer); resolve(); }
+      attempts++;
+    }, 200);
+  });
   var results = [];
   var containers = document.querySelectorAll('#b_results .b_algo');
   for (var i = 0; i < containers.length; i++) {
@@ -154,7 +170,15 @@ const BING_JS: &str = r#"
 "#;
 
 const BAIDU_JS: &str = r#"
-(function() {
+(async function() {
+  await new Promise(function(resolve) {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      var els = document.querySelectorAll('#content_left .result, #content_left .result-op');
+      if (els.length > 0 || attempts > 40) { clearInterval(timer); resolve(); }
+      attempts++;
+    }, 200);
+  });
   var results = [];
   var containers = document.querySelectorAll('#content_left .result, #content_left .result-op');
   for (var i = 0; i < containers.length; i++) {
@@ -187,7 +211,16 @@ const BAIDU_JS: &str = r#"
 "#;
 
 const DUCKDUCKGO_JS: &str = r#"
-(function() {
+(async function() {
+  await new Promise(function(resolve) {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      var els = document.querySelectorAll('[data-result]');
+      if (els.length === 0) { els = document.querySelectorAll('article[data-testid="result"]'); }
+      if (els.length > 0 || attempts > 40) { clearInterval(timer); resolve(); }
+      attempts++;
+    }, 200);
+  });
   var results = [];
   var containers = document.querySelectorAll('[data-result]');
   if (containers.length === 0) {

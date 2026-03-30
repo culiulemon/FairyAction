@@ -221,7 +221,7 @@ DOM 以层级化文本表示，使用 2 空格缩进体现包含关系：
 | `go_back` | — | 浏览器后退 |
 | `go_forward` | — | 浏览器前进 |
 | `reload` | — | 刷新页面 |
-| `search` | `query` (必填), `engine` (可选, 默认 google, 可选值: google/bing/baidu/duckduckgo) | 搜索引擎搜索，返回结构化结果（标题、URL、摘要） |
+| `search` | `query` (必填), `engine` (可选, 默认 bing, 可选值: bing/baidu/google/duckduckgo) | 搜索引擎搜索，返回结构化结果（标题、URL、摘要） |
 
 ### 交互类
 

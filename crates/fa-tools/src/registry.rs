@@ -678,13 +678,15 @@ impl Registry {
 }
 
 fn urlencoding(s: &str) -> String {
-    s.chars().map(|c| {
-        if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-            c.to_string()
+    let mut result = String::with_capacity(s.len() * 3);
+    for byte in s.as_bytes() {
+        if byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b'_' || *byte == b'.' || *byte == b'~' {
+            result.push(*byte as char);
         } else {
-            format!("%{:02X}", c as u8)
+            result.push_str(&format!("%{:02X}", byte));
         }
-    }).collect()
+    }
+    result
 }
 
 #[cfg(test)]

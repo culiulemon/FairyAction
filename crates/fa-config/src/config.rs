@@ -42,7 +42,7 @@ pub struct BrowserConfig {
     pub app_title: Option<String>,
 }
 
-fn default_headless() -> bool { true }
+fn default_headless() -> bool { false }
 fn default_viewport_width() -> u32 { 1280 }
 fn default_viewport_height() -> u32 { 720 }
 fn default_profile_name() -> Option<String> { Some("Fairy".to_string()) }
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert!(config.browser.headless);
+        assert!(!config.browser.headless);
         assert_eq!(config.browser.viewport_width, 1280);
     }
 
