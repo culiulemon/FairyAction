@@ -430,7 +430,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Failed to create browser session: {}", e))?;
             let session = Arc::new(session);
 
-            let registry = Arc::new(Registry::new());
+            let registry = Arc::new(Registry::new().with_default_search_engine(&app_config.default_search_engine));
             registry.register_default_actions().await;
 
             run_interactive(session, registry).await;

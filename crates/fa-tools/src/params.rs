@@ -247,6 +247,25 @@ impl ActionResult {
         self
     }
 
+    pub fn with_extracted_links(mut self, links: Vec<String>) -> Self {
+        self.extracted_links = Some(links);
+        self
+    }
+
+    pub fn extracted_with_links(content: impl Into<String>, links: Vec<String>) -> Self {
+        Self {
+            success: true,
+            output: None,
+            error: None,
+            include_in_memory: true,
+            is_done: false,
+            extracted_content: Some(content.into()),
+            extracted_links: Some(links),
+            extracted_images: None,
+            state_after: None,
+        }
+    }
+
     pub fn with_state_after(mut self, state: ActionStateAfter) -> Self {
         self.state_after = Some(state);
         self

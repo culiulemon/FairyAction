@@ -18,6 +18,8 @@ pub enum ConfigError {
 pub struct Config {
     #[serde(default)]
     pub browser: BrowserConfig,
+    #[serde(default = "default_search_engine")]
+    pub default_search_engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ fn default_viewport_width() -> u32 { 1280 }
 fn default_viewport_height() -> u32 { 720 }
 fn default_profile_name() -> Option<String> { Some("Fairy".to_string()) }
 fn default_app_title() -> Option<String> { Some("FairyBrowser".to_string()) }
+fn default_search_engine() -> String { "bing".to_string() }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
@@ -65,6 +68,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             browser: BrowserConfig::default(),
+            default_search_engine: default_search_engine(),
         }
     }
 }
@@ -140,6 +144,9 @@ impl Config {
         if let Ok(v) = std::env::var("FA_BROWSER_APP_TITLE") {
             self.browser.app_title = Some(v);
         }
+        if let Ok(v) = std::env::var("FA_DEFAULT_SEARCH_ENGINE") {
+            self.default_search_engine = v;
+        }
         self
     }
 
@@ -186,6 +193,7 @@ impl Config {
                 "app_title" => self.browser.app_title = Some(value.to_string()),
                 _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
             },
+            ["default_search_engine"] => self.default_search_engine = value.to_string(),
             _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
         }
         Ok(())

@@ -16,6 +16,7 @@ pub struct RegisteredAction {
 pub struct Registry {
     actions: RwLock<HashMap<String, RegisteredAction>>,
     excluded: RwLock<Vec<String>>,
+    default_search_engine: String,
 }
 
 impl Registry {
@@ -23,7 +24,13 @@ impl Registry {
         Self {
             actions: RwLock::new(HashMap::new()),
             excluded: RwLock::new(Vec::new()),
+            default_search_engine: crate::extract_search_results::DEFAULT_SEARCH_ENGINE.to_string(),
         }
+    }
+
+    pub fn with_default_search_engine(mut self, engine: impl Into<String>) -> Self {
+        self.default_search_engine = engine.into();
+        self
     }
 
     pub async fn register<F, Fut>(&self, definition: ActionDef, handler: F)
@@ -248,21 +255,24 @@ impl Registry {
             },
         ).await;
 
+        let default_engine = self.default_search_engine.clone();
         self.register(
-            ActionDef::new("search", "Search using a search engine. Navigates to search results page.")
+            ActionDef::new("search", "Search using a search engine. Returns structured search results with titles, URLs, and snippets.")
                 .param("query", crate::params::ParamType::String, "Search query string")
-                .enum_param("engine", "Search engine to use", vec!["duckduckgo".to_string(), "google".to_string(), "bing".to_string()], Some("duckduckgo"))
-                .terminates_sequence(),
-            |ctx, params| async move {
+                .enum_param("engine", "Search engine to use", crate::extract_search_results::SEARCH_ENGINES.iter().map(|s| s.to_string()).collect(), Some(&default_engine)),
+            move |ctx, params| {
+                let default_engine = default_engine.clone();
+                async move {
                 let p = parse_action_params(&params);
                 let query = match get_string(&p, "query") {
                     Some(q) => q,
                     None => return ActionResult::error("Missing required parameter: query"),
                 };
-                let engine = get_string(&p, "engine").unwrap_or_else(|| "duckduckgo".to_string());
+                let engine = get_string(&p, "engine").unwrap_or_else(|| default_engine.clone());
                 let url = match engine.as_str() {
                     "google" => format!("https://www.google.com/search?q={}", urlencoding(&query)),
                     "bing" => format!("https://www.bing.com/search?q={}", urlencoding(&query)),
+                    "baidu" => format!("https://www.baidu.com/s?wd={}", urlencoding(&query)),
                     _ => format!("https://duckduckgo.com/?q={}", urlencoding(&query)),
                 };
                 let url_before = ctx.page_url.clone();
@@ -270,11 +280,19 @@ impl Registry {
                 match ctx.session.navigate(&url).await {
                     Ok(_) => {
                         let state = ctx.capture_state_after(&url_before, tab_count_before).await;
-                        ActionResult::success(format!("Searched '{}' via {}", query, engine))
+                        let js = crate::extract_search_results::get_extraction_js(&engine);
+                        let results = match ctx.session.evaluate_js(js).await {
+                            Ok(value) => crate::extract_search_results::parse_search_results(&value),
+                            Err(_) => Vec::new(),
+                        };
+                        let formatted = crate::extract_search_results::format_search_results(&query, &engine, &results);
+                        let links = crate::extract_search_results::extract_links(&results);
+                        ActionResult::extracted_with_links(formatted, links)
                             .with_state_after(state)
                     }
                     Err(e) => ActionResult::error(format!("Search failed: {}", e)),
                 }
+            }
             },
         ).await;
     }
