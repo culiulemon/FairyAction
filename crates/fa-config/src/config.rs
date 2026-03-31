@@ -20,6 +20,10 @@ pub struct Config {
     pub browser: BrowserConfig,
     #[serde(default = "default_search_engine")]
     pub default_search_engine: String,
+    #[serde(default)]
+    pub screenshot_dir: Option<String>,
+    #[serde(default)]
+    pub download_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +73,8 @@ impl Default for Config {
         Self {
             browser: BrowserConfig::default(),
             default_search_engine: default_search_engine(),
+            screenshot_dir: None,
+            download_dir: None,
         }
     }
 }
@@ -147,6 +153,12 @@ impl Config {
         if let Ok(v) = std::env::var("FA_DEFAULT_SEARCH_ENGINE") {
             self.default_search_engine = v;
         }
+        if let Ok(v) = std::env::var("FA_SCREENSHOT_DIR") {
+            self.screenshot_dir = Some(v);
+        }
+        if let Ok(v) = std::env::var("FA_DOWNLOAD_DIR") {
+            self.download_dir = Some(v);
+        }
         self
     }
 
@@ -194,6 +206,8 @@ impl Config {
                 _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
             },
             ["default_search_engine"] => self.default_search_engine = value.to_string(),
+            ["screenshot_dir"] => self.screenshot_dir = Some(value.to_string()),
+            ["download_dir"] => self.download_dir = Some(value.to_string()),
             _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
         }
         Ok(())

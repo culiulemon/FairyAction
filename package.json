@@ -1,0 +1,12 @@
+{
+  "name": "fairy-action",
+  "private": true,
+  "scripts": {
+    "build": "cargo build",
+    "build:release": "cargo build --release",
+    "build:all": "cargo build --release -p fa-cli -p fa-tester",
+    "test": "cargo test",
+    "run": "cargo run -- -p fa-cli",
+    "clean": "cargo clean"
+  }
+}

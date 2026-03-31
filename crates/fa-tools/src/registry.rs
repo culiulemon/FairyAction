@@ -2,6 +2,7 @@ use crate::actions::ActionContext;
 use crate::params::{ActionDef, ActionResult, get_bool, get_bool_raw, get_f64, get_i64, get_string, parse_action_params};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
@@ -17,6 +18,8 @@ pub struct Registry {
     actions: RwLock<HashMap<String, RegisteredAction>>,
     excluded: RwLock<Vec<String>>,
     default_search_engine: String,
+    screenshot_dir: Option<PathBuf>,
+    download_dir: Option<PathBuf>,
 }
 
 impl Registry {
@@ -25,12 +28,32 @@ impl Registry {
             actions: RwLock::new(HashMap::new()),
             excluded: RwLock::new(Vec::new()),
             default_search_engine: crate::extract_search_results::DEFAULT_SEARCH_ENGINE.to_string(),
+            screenshot_dir: None,
+            download_dir: None,
         }
     }
 
     pub fn with_default_search_engine(mut self, engine: impl Into<String>) -> Self {
         self.default_search_engine = engine.into();
         self
+    }
+
+    pub fn with_screenshot_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.screenshot_dir = Some(dir.into());
+        self
+    }
+
+    pub fn with_download_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.download_dir = Some(dir.into());
+        self
+    }
+
+    pub fn screenshot_dir(&self) -> Option<&PathBuf> {
+        self.screenshot_dir.as_ref()
+    }
+
+    pub fn download_dir(&self) -> Option<&PathBuf> {
+        self.download_dir.as_ref()
     }
 
     pub async fn register<F, Fut>(&self, definition: ActionDef, handler: F)

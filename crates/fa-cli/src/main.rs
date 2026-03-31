@@ -49,9 +49,6 @@ enum Commands {
 
         #[arg(long, value_enum, help = "Log level (used with --quiet, default: warn)")]
         log_level: Option<LogLevel>,
-
-        #[arg(long, help = "Directory to save screenshots (default: temp dir)")]
-        screenshot_dir: Option<PathBuf>,
     },
 
     #[command(name = "list-actions")]
@@ -237,28 +234,41 @@ fn save_screenshot_to_disk(base64_data: &str, screenshot_dir: Option<&PathBuf>) 
 }
 
 fn action_result_to_data(r: fa_tools::params::ActionResult, screenshot_dir: Option<&PathBuf>) -> ActionResultData {
-    ActionResultData {
-        success: r.success,
-        output: r.output,
-        error: r.error,
-        extracted_content: r.extracted_content,
-        is_done: r.is_done,
-        state_after: r.state_after.map(|s| {
-            let screenshot_path = if let Some(ref b64) = s.screenshot {
+    let (state_after, screenshot_path) = match r.state_after {
+        Some(s) => {
+            let path = if let Some(ref b64) = s.screenshot {
                 save_screenshot_to_disk(b64, screenshot_dir).ok()
             } else {
                 None
             };
-            StateAfterData {
+            let state = StateAfterData {
                 url: s.url,
                 title: s.title,
                 tab_count: s.tab_count,
                 new_tab_opened: s.new_tab_opened,
                 navigation_occurred: s.navigation_occurred,
-                screenshot: if screenshot_path.is_some() { None } else { s.screenshot },
-                screenshot_path,
-            }
-        }),
+                screenshot: if path.is_some() { None } else { s.screenshot },
+                screenshot_path: path.clone(),
+            };
+            (Some(state), path)
+        }
+        None => (None, None),
+    };
+
+    let output = match (r.output, screenshot_path) {
+        (Some(base_output), Some(ref path)) => {
+            Some(format!("{}: {}", base_output, path))
+        }
+        (output, _) => output,
+    };
+
+    ActionResultData {
+        success: r.success,
+        output,
+        error: r.error,
+        extracted_content: r.extracted_content,
+        is_done: r.is_done,
+        state_after,
     }
 }
 
@@ -273,7 +283,7 @@ fn write_response(resp: &Response) {
     let _ = out.flush();
 }
 
-async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &Arc<Registry>, screenshot_dir: Option<&PathBuf>) -> Response {
+async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &Arc<Registry>) -> Response {
     match req {
         Request::Execute { action, params } => {
             debug!(action = %action, "Executing action via request");
@@ -286,7 +296,7 @@ async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &
             match registry.execute(&action, params, ctx).await {
                 Ok(result) => Response::Ok {
                     action: Some(action),
-                    result: action_result_to_data(result, screenshot_dir),
+                    result: action_result_to_data(result, registry.screenshot_dir()),
                 },
                 Err(e) => Response::Error {
                     message: e.to_string(),
@@ -404,7 +414,7 @@ async fn handle_request(req: Request, session: &Arc<BrowserSession>, registry: &
     }
 }
 
-async fn run_interactive(session: Arc<BrowserSession>, registry: Arc<Registry>, screenshot_dir: Option<PathBuf>) {
+async fn run_interactive(session: Arc<BrowserSession>, registry: Arc<Registry>) {
     info!("Interactive mode started. Waiting for JSON requests on stdin...");
 
     let stdin = std::io::stdin();
@@ -439,7 +449,7 @@ async fn run_interactive(session: Arc<BrowserSession>, registry: Arc<Registry>, 
             break;
         }
 
-        let resp = handle_request(req, &session, &registry, screenshot_dir.as_ref()).await;
+        let resp = handle_request(req, &session, &registry).await;
         write_response(&resp);
     }
 
@@ -451,7 +461,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { show_browser, log_level, screenshot_dir } => {
+        Commands::Run { show_browser, log_level } => {
             if cli.quiet {
                 let log_level = match log_level.as_ref() {
                     Some(LogLevel::Error) => "error",
@@ -492,10 +502,17 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Failed to create browser session: {}", e))?;
             let session = Arc::new(session);
 
-            let registry = Arc::new(Registry::new().with_default_search_engine(&app_config.default_search_engine));
+            let mut registry = Registry::new().with_default_search_engine(&app_config.default_search_engine);
+            if let Some(ref dir) = app_config.screenshot_dir {
+                registry = registry.with_screenshot_dir(dir);
+            }
+            if let Some(ref dir) = app_config.download_dir {
+                registry = registry.with_download_dir(dir);
+            }
+            let registry = Arc::new(registry);
             registry.register_default_actions().await;
 
-            run_interactive(session, registry, screenshot_dir).await;
+            run_interactive(session, registry).await;
         }
 
         Commands::ListActions => {
