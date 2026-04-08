@@ -21,6 +21,7 @@ clap = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 fa-config = { workspace = true }
+fa-fap = { workspace = true }
 fa-browser = { workspace = true }
 fa-dom = { workspace = true }
 fa-tools = { workspace = true }

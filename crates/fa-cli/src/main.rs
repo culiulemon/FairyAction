@@ -4,12 +4,16 @@ use fa_browser::profile::BrowserProfile;
 use fa_browser::session::BrowserSession;
 use fa_config::Config;
 use fa_dom::service::DomService;
+use fa_fap::invoke::{SpecialVars, render_invoke};
+use fa_fap::package::{install_package, inspect_package, list_packages, uninstall_package};
+use fa_fap::parser::parse_output;
+use fa_fap::process::execute_process;
 use fa_tools::actions::ActionContext;
 use fa_tools::registry::Registry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
@@ -60,6 +64,12 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// FAP 包管理
+    Fap {
+        #[command(subcommand)]
+        command: FapCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,6 +79,48 @@ enum ConfigAction {
     Set {
         key: String,
         value: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum FapCommand {
+    /// 安装 FAP 包
+    Install {
+        /// FAP 包文件路径 (.fap)
+        path: String,
+    },
+    /// 卸载 FAP 包
+    Uninstall {
+        /// 包名 (如 com.ffmpeg.fap)
+        package: String,
+    },
+    /// 列出已安装的 FAP 包
+    List,
+    /// 查看 FAP 包详情
+    Inspect {
+        /// 包名
+        package: String,
+    },
+    /// 直接运行 FAP 包中的动作（调试用）
+    Run {
+        /// 包名
+        package: String,
+        /// 能力域名称
+        capability: String,
+        /// 动作名称
+        action: String,
+        /// JSON 格式的参数
+        #[arg(default_value = "{}")]
+        params: String,
+        /// FAP 安装目录（覆盖默认）
+        #[arg(long = "fap-install-dir")]
+        fap_install_dir: Option<String>,
+        /// 临时文件目录（覆盖默认）
+        #[arg(long = "fap-temp-dir")]
+        fap_temp_dir: Option<String>,
+        /// 宿主数据目录
+        #[arg(long = "fap-host-data-dir")]
+        fap_host_data_dir: Option<String>,
     },
 }
 
@@ -550,6 +602,132 @@ async fn main() -> anyhow::Result<()> {
                 println!("Set {} = {}", key, value);
             }
         },
+
+        Commands::Fap { command } => {
+            let mut config = if let Some(config_path) = &cli.config {
+                Config::load_from_path(config_path)?
+            } else {
+                Config::load()
+            };
+
+            match command {
+                FapCommand::Install { path } => {
+                    let install_dir = config.fap.resolved_install_dir();
+                    let manifest = install_package(Path::new(&path), Path::new(&install_dir)).await?;
+                    println!("Installed: {} v{}", manifest.name, manifest.version);
+                }
+
+                FapCommand::Uninstall { package } => {
+                    let install_dir = config.fap.resolved_install_dir();
+                    uninstall_package(&package, Path::new(&install_dir)).await?;
+                    println!("Uninstalled: {}", package);
+                }
+
+                FapCommand::List => {
+                    let install_dir = config.fap.resolved_install_dir();
+                    let packages = list_packages(Path::new(&install_dir)).await?;
+                    if packages.is_empty() {
+                        println!("No FAP packages installed.");
+                    } else {
+                        for pkg in &packages {
+                            println!("{} {} ({})", pkg.package, pkg.version, pkg.name);
+                        }
+                    }
+                }
+
+                FapCommand::Inspect { package } => {
+                    let install_dir = config.fap.resolved_install_dir();
+                    let manifest = inspect_package(&package, Path::new(&install_dir)).await?;
+                    println!("{}", serde_json::to_string_pretty(&manifest)?);
+                }
+
+                FapCommand::Run {
+                    package,
+                    capability,
+                    action,
+                    params,
+                    fap_install_dir,
+                    fap_temp_dir,
+                    fap_host_data_dir,
+                } => {
+                    if let Some(dir) = fap_install_dir {
+                        config.fap.install_dir = Some(dir);
+                    }
+                    if let Some(dir) = fap_temp_dir {
+                        config.fap.temp_dir = Some(dir);
+                    }
+                    if let Some(dir) = fap_host_data_dir {
+                        config.fap.host_data_dir = Some(dir);
+                    }
+
+                    let install_dir = config.fap.resolved_install_dir();
+                    let temp_dir = config.fap.resolved_temp_dir();
+                    let manifest = inspect_package(&package, Path::new(&install_dir)).await?;
+
+                    let cap_domains = manifest.capabilities.get(&capability).ok_or_else(|| {
+                        anyhow::anyhow!("capability '{}' not found in package '{}'", capability, package)
+                    })?;
+
+                    let cap_domain = cap_domains.iter().find(|d| d.名称 == capability).ok_or_else(|| {
+                        anyhow::anyhow!("capability domain '{}' not found", capability)
+                    })?;
+
+                    let action_def = cap_domain.动作.iter().find(|a| a.名称 == action).ok_or_else(|| {
+                        anyhow::anyhow!("action '{}' not found in capability '{}'", action, capability)
+                    })?;
+
+                    let invoke_config = action_def.invoke.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("action '{}' has no invoke config", action)
+                    })?;
+
+                    let params_value: Value = serde_json::from_str(&params)
+                        .map_err(|e| anyhow::anyhow!("invalid JSON params: {}", e))?;
+
+                    let platform = fa_fap::detect_platform();
+                    let entry_binary = manifest.entry.get(&platform).ok_or_else(|| {
+                        anyhow::anyhow!("no entry binary for platform '{}'", platform)
+                    })?;
+
+                    let package_dir = Path::new(&install_dir).join(&package);
+                    let binary_path = package_dir.join(entry_binary);
+
+                    let special_vars = SpecialVars {
+                        temp_dir,
+                        package_dir: package_dir.to_string_lossy().to_string(),
+                        host_data_dir: config.fap.host_data_dir.clone(),
+                    };
+
+                    let args = render_invoke(invoke_config, &params_value, &special_vars)?;
+
+                    let result = execute_process(
+                        &binary_path,
+                        &args,
+                        invoke_config.env.as_ref(),
+                        Some(&package_dir),
+                        invoke_config.timeout.or(Some(config.fap.default_timeout)),
+                    ).await?;
+
+                    if !result.stderr.is_empty() {
+                        eprintln!("{}", result.stderr);
+                    }
+
+                    if let Some(ref output_config) = invoke_config.output {
+                        let source = match output_config.source.as_str() {
+                            "stderr" => &result.stderr,
+                            _ => &result.stdout,
+                        };
+                        let parsed = parse_output(&output_config.parser, source, output_config.pattern.as_deref())?;
+                        println!("{}", serde_json::to_string_pretty(&parsed)?);
+                    } else {
+                        println!("{}", result.stdout);
+                    }
+
+                    if result.exit_code != 0 {
+                        std::process::exit(result.exit_code);
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

@@ -24,6 +24,8 @@ pub struct Config {
     pub screenshot_dir: Option<String>,
     #[serde(default)]
     pub download_dir: Option<String>,
+    #[serde(default)]
+    pub fap: FapConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +70,63 @@ impl Default for BrowserConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FapConfig {
+    #[serde(default)]
+    pub install_dir: Option<String>,
+    #[serde(default)]
+    pub temp_dir: Option<String>,
+    #[serde(default)]
+    pub host_data_dir: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub default_timeout: u32,
+    #[serde(default)]
+    pub max_concurrent: Option<u32>,
+}
+
+fn default_timeout() -> u32 {
+    60
+}
+
+impl FapConfig {
+    pub fn new() -> Self {
+        Self {
+            install_dir: None,
+            temp_dir: None,
+            host_data_dir: None,
+            default_timeout: 60,
+            max_concurrent: None,
+        }
+    }
+
+    pub fn default_install_dir() -> String {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("fairy-action")
+            .join("fap")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    pub fn resolved_install_dir(&self) -> String {
+        self.install_dir.clone()
+            .unwrap_or_else(|| Self::default_install_dir())
+    }
+
+    pub fn resolved_temp_dir(&self) -> String {
+        self.temp_dir.clone()
+            .unwrap_or_else(|| {
+                std::env::temp_dir().to_string_lossy().to_string()
+            })
+    }
+}
+
+impl Default for FapConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -75,6 +134,7 @@ impl Default for Config {
             default_search_engine: default_search_engine(),
             screenshot_dir: None,
             download_dir: None,
+            fap: FapConfig::default(),
         }
     }
 }
@@ -159,6 +219,21 @@ impl Config {
         if let Ok(v) = std::env::var("FA_DOWNLOAD_DIR") {
             self.download_dir = Some(v);
         }
+        if let Ok(v) = std::env::var("FA_FAP_INSTALL_DIR") {
+            self.fap.install_dir = Some(v);
+        }
+        if let Ok(v) = std::env::var("FA_FAP_TEMP_DIR") {
+            self.fap.temp_dir = Some(v);
+        }
+        if let Ok(v) = std::env::var("FA_FAP_HOST_DATA_DIR") {
+            self.fap.host_data_dir = Some(v);
+        }
+        if let Ok(v) = std::env::var("FA_FAP_DEFAULT_TIMEOUT") {
+            if let Ok(n) = v.parse() { self.fap.default_timeout = n; }
+        }
+        if let Ok(v) = std::env::var("FA_FAP_MAX_CONCURRENT") {
+            if let Ok(n) = v.parse() { self.fap.max_concurrent = Some(n); }
+        }
         self
     }
 
@@ -208,6 +283,14 @@ impl Config {
             ["default_search_engine"] => self.default_search_engine = value.to_string(),
             ["screenshot_dir"] => self.screenshot_dir = Some(value.to_string()),
             ["download_dir"] => self.download_dir = Some(value.to_string()),
+            ["fap", sub_key] => match *sub_key {
+                "install_dir" => self.fap.install_dir = Some(value.to_string()),
+                "temp_dir" => self.fap.temp_dir = Some(value.to_string()),
+                "host_data_dir" => self.fap.host_data_dir = Some(value.to_string()),
+                "default_timeout" => self.fap.default_timeout = value.parse::<u32>().map_err(|e| ConfigError::ParseFailed(e.to_string()))?,
+                "max_concurrent" => self.fap.max_concurrent = Some(value.parse::<u32>().map_err(|e| ConfigError::ParseFailed(e.to_string()))?),
+                _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
+            },
             _ => return Err(ConfigError::ParseFailed(format!("Unknown key: {}", key))),
         }
         Ok(())

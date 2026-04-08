@@ -179,11 +179,16 @@ impl Registry {
     }
 
     pub async fn register_default_actions(&self) {
+        self.register_default_actions_with_config(&fa_config::FapConfig::default()).await;
+    }
+
+    pub async fn register_default_actions_with_config(&self, fap_config: &fa_config::FapConfig) {
         self.register_default_nav_actions().await;
         self.register_default_interact_actions().await;
         self.register_default_page_actions().await;
         self.register_default_file_actions().await;
         self.register_default_meta_actions().await;
+        crate::fap_actions::register_fap_actions(self, fap_config).await;
     }
 
     async fn register_default_nav_actions(&self) {

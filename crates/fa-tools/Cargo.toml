@@ -17,3 +17,6 @@ async-trait = { workspace = true }
 fa-browser = { workspace = true }
 fa-actor = { workspace = true }
 fa-dom = { workspace = true }
+fa-bridge = { workspace = true }
+fa-fap = { workspace = true }
+fa-config = { workspace = true }
