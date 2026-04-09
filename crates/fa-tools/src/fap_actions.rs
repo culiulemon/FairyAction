@@ -2,22 +2,24 @@ use crate::params::{ActionDef, ActionResult, get_string, parse_action_params};
 use crate::registry::Registry;
 use fa_bridge::message::{BridgeMessage, BridgeMessageType};
 use fa_fap::invoke::{self, SpecialVars};
-use fa_fap::manifest::Manifest;
+use fa_fap::manifest::{Manifest, PackageMode};
 use fa_fap::package;
 use fa_fap::parser;
-use fa_fap::process;
 use fa_fap::platform;
+use fa_fap::process;
+use fa_fap::process_pool::ProcessPool;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex as AsyncMutex};
 use tracing::{info, warn};
 
 pub struct FapManager {
     install_dir: PathBuf,
     manifests: RwLock<HashMap<String, Manifest>>,
-    config: fa_config::FapConfig,
+    config: RwLock<fa_config::FapConfig>,
+    process_pool: AsyncMutex<ProcessPool>,
 }
 
 impl FapManager {
@@ -26,7 +28,8 @@ impl FapManager {
         Self {
             install_dir,
             manifests: RwLock::new(HashMap::new()),
-            config: config.clone(),
+            config: RwLock::new(config.clone()),
+            process_pool: AsyncMutex::new(ProcessPool::new()),
         }
     }
 
@@ -77,14 +80,38 @@ impl FapManager {
             None => return ActionResult::error("missing module in bridge call"),
         };
 
-        let channel = message.channel.as_ref().map(|s| s.as_str());
-        let action_name = message.action.as_ref().map(|s| s.as_str());
-
         let manifests = self.manifests.read().await;
         let manifest = match manifests.get(module) {
             Some(m) => m,
             None => return ActionResult::error(format!("FAP package not found: {}", module)),
         };
+
+        if manifest.permissions.is_empty() {
+            warn!(
+                package = %module,
+                "FAP package has no permissions declared"
+            );
+        } else {
+            info!(
+                package = %module,
+                permissions = ?manifest.permissions,
+                "FAP package permissions"
+            );
+        }
+
+        match manifest.mode {
+            PackageMode::Manifest => {
+                self.handle_manifest_call(manifest, module, message).await
+            }
+            PackageMode::Sdk => {
+                self.handle_sdk_call(manifest, module, message).await
+            }
+        }
+    }
+
+    async fn handle_manifest_call(&self, manifest: &Manifest, module: &str, message: &BridgeMessage) -> ActionResult {
+        let channel = message.channel.as_ref().map(|s| s.as_str());
+        let action_name = message.action.as_ref().map(|s| s.as_str());
 
         let platform_str = platform::detect_platform();
         let binary = match manifest.entry.get(&platform_str) {
@@ -124,11 +151,14 @@ impl FapManager {
             None => return ActionResult::error("action has no invoke config"),
         };
 
+        let config = self.config.read().await;
         let special_vars = SpecialVars {
-            temp_dir: self.config.resolved_temp_dir(),
+            temp_dir: config.resolved_temp_dir(),
             package_dir: self.install_dir.join(module).to_string_lossy().to_string(),
-            host_data_dir: self.config.host_data_dir.clone(),
+            host_data_dir: config.host_data_dir.clone(),
         };
+        let default_timeout = config.default_timeout;
+        drop(config);
 
         let args = match invoke::render_invoke(invoke_config, &message.payload, &special_vars) {
             Ok(a) => a,
@@ -136,7 +166,7 @@ impl FapManager {
         };
 
         let env = invoke_config.env.as_ref();
-        let timeout = invoke_config.timeout.or(Some(self.config.default_timeout));
+        let timeout = invoke_config.timeout.or(Some(default_timeout));
 
         let result = match process::execute_process(
             &binary,
@@ -182,6 +212,170 @@ impl FapManager {
 
         ActionResult::success(output_text)
     }
+
+    async fn handle_sdk_call(&self, manifest: &Manifest, module: &str, message: &BridgeMessage) -> ActionResult {
+        let channel = message.channel.as_ref().map(|s| s.as_str()).unwrap_or("");
+        let action_name = message.action.as_ref().map(|s| s.as_str()).unwrap_or("");
+
+        let lifecycle = manifest.lifecycle.as_ref();
+        let use_persistent = lifecycle.map_or(false, |l| {
+            matches!(l, fa_fap::manifest::Lifecycle::Persistent | fa_fap::manifest::Lifecycle::Both)
+        });
+
+        if use_persistent {
+            let platform_str = platform::detect_platform();
+            let binary = match manifest.entry.get(&platform_str) {
+                Some(e) => self.install_dir.join(module).join(e),
+                None => return ActionResult::error(format!("no binary for platform: {}", platform_str)),
+            };
+
+            let mut pool = self.process_pool.lock().await;
+
+            if let Err(e) = pool.get_or_spawn(module, &binary).await {
+                return ActionResult::error(format!("failed to spawn persistent process: {}", e));
+            }
+
+            match pool.send_call(module, channel, action_name, &message.payload).await {
+                Ok(result) => {
+                    if result.success {
+                        ActionResult::success(serde_json::to_string_pretty(&result.payload).unwrap_or_default())
+                    } else {
+                        ActionResult::error(serde_json::to_string_pretty(&result.payload).unwrap_or_default())
+                    }
+                }
+                Err(e) => ActionResult::error(format!("persistent call error: {}", e)),
+            }
+        } else {
+            let platform_str = platform::detect_platform();
+            let binary = match manifest.entry.get(&platform_str) {
+                Some(e) => self.install_dir.join(module).join(e),
+                None => return ActionResult::error(format!("no binary for platform: {}", platform_str)),
+            };
+
+            let mut args = vec![action_name.to_string()];
+            if let Value::Object(map) = &message.payload {
+                for (key, value) in map {
+                    args.push(format!("--{}", key));
+                    match value {
+                        Value::String(s) => args.push(s.clone()),
+                        Value::Number(n) => args.push(n.to_string()),
+                        Value::Bool(b) => {
+                            if !b {
+                                args.pop();
+                                args.push(format!("--no-{}", key));
+                            }
+                        }
+                        _ => args.push(value.to_string()),
+                    }
+                }
+            }
+
+            let config = self.config.read().await;
+            let timeout = Some(config.default_timeout);
+            drop(config);
+
+            match process::execute_process(&binary, &args, None, None, timeout).await {
+                Ok(result) => {
+                    if result.exit_code == 0 {
+                        ActionResult::success(result.stdout)
+                    } else {
+                        ActionResult::error(result.stderr.chars().take(500).collect::<String>())
+                    }
+                }
+                Err(e) => ActionResult::error(format!("process error: {}", e)),
+            }
+        }
+    }
+
+    pub async fn handle_hello(&self, module: Option<&str>) -> ActionResult {
+        let manifests = self.manifests.read().await;
+        let mut result = serde_json::Map::new();
+
+        if let Some(module_name) = module {
+            if let Some(manifest) = manifests.get(module_name) {
+                result.insert("module".to_string(), Value::String(module_name.to_string()));
+                result.insert("capabilities".to_string(), manifest_to_capabilities_json(manifest));
+            } else {
+                return ActionResult::error(format!("module not found: {}", module_name));
+            }
+        } else {
+            let modules: serde_json::Map<String, Value> = manifests.iter()
+                .map(|(name, manifest)| {
+                    (name.clone(), manifest_to_capabilities_json(manifest))
+                })
+                .collect();
+            result.insert("modules".to_string(), Value::Object(modules));
+        }
+
+        ActionResult::success(serde_json::to_string_pretty(&result).unwrap())
+    }
+
+    pub async fn handle_configure(&self, payload: &Value) -> ActionResult {
+        let mut config = self.config.write().await;
+        let mut updated = Vec::new();
+
+        if let Value::Object(map) = payload {
+            for (key, value) in map {
+                let str_value = match value {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    other => other.to_string(),
+                };
+
+                match key.as_str() {
+                    "fap.install_dir" => { config.install_dir = Some(str_value); updated.push(key.clone()); }
+                    "fap.temp_dir" => { config.temp_dir = Some(str_value); updated.push(key.clone()); }
+                    "fap.host_data_dir" => { config.host_data_dir = Some(str_value); updated.push(key.clone()); }
+                    "fap.default_timeout" => {
+                        if let Ok(t) = str_value.parse::<u32>() { config.default_timeout = t; updated.push(key.clone()); }
+                    }
+                    "fap.max_concurrent" => {
+                        if let Ok(c) = str_value.parse::<u32>() { config.max_concurrent = Some(c); updated.push(key.clone()); }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let install_dir_changed = updated.iter().any(|k| k == "fap.install_dir");
+        drop(config);
+
+        if install_dir_changed {
+            if let Err(e) = self.refresh_manifests().await {
+                return ActionResult::error(format!("configure applied but refresh failed: {}", e));
+            }
+        }
+
+        ActionResult::success(serde_json::to_string_pretty(&serde_json::json!({
+            "applied": true,
+            "updated": updated
+        })).unwrap())
+    }
+}
+
+fn manifest_to_capabilities_json(manifest: &Manifest) -> Value {
+    let domains: Vec<Value> = manifest.capabilities.iter()
+        .flat_map(|(_, domain_list)| domain_list.iter())
+        .map(|domain| {
+            let actions: Vec<Value> = domain.动作.iter().map(|action| {
+                let params: serde_json::Map<String, Value> = action.参数.iter().map(|(k, v)| {
+                    (k.clone(), serde_json::json!({
+                        "类型": v.param_type,
+                        "必填": v.必填.unwrap_or(false),
+                        "描述": v.描述.as_ref().unwrap_or(&"".to_string())
+                    }))
+                }).collect();
+                serde_json::json!({
+                    "名称": action.名称,
+                    "参数": params
+                })
+            }).collect();
+            serde_json::json!({
+                "名称": domain.名称,
+                "动作": actions
+            })
+        }).collect();
+    serde_json::json!({"能力域": domains})
 }
 
 pub async fn register_fap_actions(registry: &Registry, config: &fa_config::FapConfig) {
@@ -249,6 +443,38 @@ pub async fn register_fap_actions(registry: &Registry, config: &fa_config::FapCo
                 } else {
                     ActionResult::success(desc)
                 }
+            }
+        },
+    ).await;
+
+    let mgr = manager.clone();
+    registry.register(
+        ActionDef::new("fap_hello", "查询 FAP 能力池")
+            .optional_param("module", crate::params::ParamType::String, "指定查询的包名", Value::Null),
+        move |_ctx, params| {
+            let mgr = mgr.clone();
+            async move {
+                let p = parse_action_params(&params);
+                let module = get_string(&p, "module");
+                mgr.handle_hello(module.as_deref()).await
+            }
+        },
+    ).await;
+
+    let mgr = manager.clone();
+    registry.register(
+        ActionDef::new("fap_configure", "运行时配置注入")
+            .optional_param("config", crate::params::ParamType::String, "JSON 配置", Value::String("{}".to_string())),
+        move |_ctx, params| {
+            let mgr = mgr.clone();
+            async move {
+                let p = parse_action_params(&params);
+                let config_str = get_string(&p, "config").unwrap_or_else(|| "{}".to_string());
+                let payload: Value = match serde_json::from_str(&config_str) {
+                    Ok(v) => v,
+                    Err(e) => return ActionResult::error(format!("invalid JSON config: {}", e)),
+                };
+                mgr.handle_configure(&payload).await
             }
         },
     ).await;

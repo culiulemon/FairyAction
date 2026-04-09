@@ -25,3 +25,4 @@ fa-fap = { workspace = true }
 fa-browser = { workspace = true }
 fa-dom = { workspace = true }
 fa-tools = { workspace = true }
+fa-bridge = { workspace = true }

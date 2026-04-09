@@ -1,5 +1,7 @@
 use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
+use fa_bridge::frame::{read_frame, write_frame};
+use fa_bridge::message::{BridgeMessage, BridgeMessageType};
 use fa_browser::profile::BrowserProfile;
 use fa_browser::session::BrowserSession;
 use fa_config::Config;
@@ -9,6 +11,7 @@ use fa_fap::package::{install_package, inspect_package, list_packages, uninstall
 use fa_fap::parser::parse_output;
 use fa_fap::process::execute_process;
 use fa_tools::actions::ActionContext;
+use fa_tools::fap_actions::FapManager;
 use fa_tools::registry::Registry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -16,6 +19,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::BufReader;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
@@ -70,6 +74,19 @@ enum Commands {
         #[command(subcommand)]
         command: FapCommand,
     },
+
+    /// 触桥协议交互模式（从 stdin 读取消息，处理并返回响应）
+    Bridge {
+        /// FAP 安装目录（覆盖默认）
+        #[arg(long = "fap-install-dir")]
+        fap_install_dir: Option<String>,
+        /// 临时文件目录（覆盖默认）
+        #[arg(long = "fap-temp-dir")]
+        fap_temp_dir: Option<String>,
+        /// 宿主数据目录
+        #[arg(long = "fap-host-data-dir")]
+        fap_host_data_dir: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -88,6 +105,9 @@ pub enum FapCommand {
     Install {
         /// FAP 包文件路径 (.fap)
         path: String,
+        /// 跳过签名验证
+        #[arg(long = "skip-verify", default_value_t = false)]
+        skip_verify: bool,
     },
     /// 卸载 FAP 包
     Uninstall {
@@ -121,6 +141,39 @@ pub enum FapCommand {
         /// 宿主数据目录
         #[arg(long = "fap-host-data-dir")]
         fap_host_data_dir: Option<String>,
+    },
+    /// 生成 Ed25519 密钥对
+    Keygen {
+        /// 输出目录（默认为当前目录）
+        #[arg(long = "output")]
+        output: Option<String>,
+    },
+    /// 签名 FAP 包
+    Sign {
+        /// 私钥文件路径
+        #[arg(long = "key")]
+        key: String,
+        /// FAP 包目录路径
+        #[arg(long = "package")]
+        package: String,
+    },
+    /// 验证 FAP 包签名
+    Verify {
+        /// FAP 包目录路径
+        #[arg(long = "package")]
+        package: String,
+    },
+    /// 打包 FAP 包目录为 .fap 文件
+    Pack {
+        /// FAP 包目录路径
+        #[arg(long = "package")]
+        package: String,
+        /// 输出目录或文件路径
+        #[arg(long = "output")]
+        output: Option<String>,
+        /// 打包前验证签名
+        #[arg(long = "verify", default_value_t = true)]
+        verify: bool,
     },
 }
 
@@ -611,10 +664,22 @@ async fn main() -> anyhow::Result<()> {
             };
 
             match command {
-                FapCommand::Install { path } => {
+                FapCommand::Install { path, skip_verify } => {
                     let install_dir = config.fap.resolved_install_dir();
-                    let manifest = install_package(Path::new(&path), Path::new(&install_dir)).await?;
-                    println!("Installed: {} v{}", manifest.name, manifest.version);
+                    let verify_signature = !skip_verify;
+                    let result = install_package(Path::new(&path), Path::new(&install_dir), verify_signature).await?;
+                    println!("Installed: {} v{}", result.manifest.name, result.manifest.version);
+                    if let Some(warning) = result.signature_warning {
+                        println!("WARNING: {}", warning);
+                    }
+                    if let Some(change) = result.version_change {
+                        if change.old_version != change.new_version {
+                            println!("Version changed: {} -> {}", change.old_version, change.new_version);
+                        }
+                    }
+                    if result.signature_verified {
+                        println!("Signature verified: OK");
+                    }
                 }
 
                 FapCommand::Uninstall { package } => {
@@ -726,9 +791,168 @@ async fn main() -> anyhow::Result<()> {
                         std::process::exit(result.exit_code);
                     }
                 }
+
+                FapCommand::Keygen { output } => {
+                    let output_dir = match output {
+                        Some(ref d) => PathBuf::from(d),
+                        None => std::env::current_dir()?,
+                    };
+                    let keypair = fa_fap::generate_keypair()?;
+                    fa_fap::write_keypair(&keypair, &output_dir)?;
+                    let pub_b64 = base64::engine::general_purpose::STANDARD.encode(&keypair.public_key);
+                    println!("Key pair generated in: {}", output_dir.display());
+                    println!("Public key (base64): {}", pub_b64);
+                }
+
+                FapCommand::Sign { key, package } => {
+                    let key_path = Path::new(&key);
+                    let package_dir = Path::new(&package);
+                    fa_fap::sign_package(key_path, package_dir)?;
+                    println!("Package signed: {}", package);
+                }
+
+                FapCommand::Verify { package } => {
+                    let package_dir = Path::new(&package);
+                    match fa_fap::verify_package(package_dir)? {
+                        true => println!("Signature verification PASSED: {}", package),
+                        false => {
+                            println!("WARNING: Package is not signed: {}", package);
+                        }
+                    }
+                }
+
+                FapCommand::Pack { package, output, verify } => {
+                    let package_dir = Path::new(&package);
+                    let output_path = output.as_ref().map(PathBuf::from);
+                    let result = fa_fap::pack_fap(
+                        package_dir,
+                        output_path.as_deref(),
+                        verify,
+                    )?;
+                    println!("Package created: {}", result.display());
+                }
             }
+        }
+
+        Commands::Bridge { fap_install_dir, fap_temp_dir, fap_host_data_dir } => {
+            run_bridge_mode(fap_install_dir, fap_temp_dir, fap_host_data_dir).await;
         }
     }
 
     Ok(())
+}
+
+async fn run_bridge_mode(
+    fap_install_dir: Option<String>,
+    fap_temp_dir: Option<String>,
+    fap_host_data_dir: Option<String>,
+) {
+    let mut config = fa_config::Config::load();
+
+    if let Some(dir) = fap_install_dir {
+        config.fap.install_dir = Some(dir);
+    }
+    if let Some(dir) = fap_temp_dir {
+        config.fap.temp_dir = Some(dir);
+    }
+    if let Some(dir) = fap_host_data_dir {
+        config.fap.host_data_dir = Some(dir);
+    }
+
+    let manager = Arc::new(FapManager::new(&config.fap));
+
+    match manager.refresh_manifests().await {
+        Ok(_) => tracing::info!("FAP manifests loaded"),
+        Err(e) => tracing::warn!("Failed to load manifests: {}", e),
+    }
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut reader = stdin;
+
+    loop {
+        match read_frame(&mut reader).await {
+            Ok(frame_str) => {
+                let message = match BridgeMessage::parse(&frame_str) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let error_msg = BridgeMessage {
+                            message_type: BridgeMessageType::Error,
+                            module: None,
+                            channel: None,
+                            action: None,
+                            payload: serde_json::json!({"错误码": "PARSE_ERROR", "错误信息": e.to_string()}),
+                        };
+                        let serialized = error_msg.serialize();
+                        let _ = write_frame(&mut stdout, &serialized).await;
+                        continue;
+                    }
+                };
+
+                let response = match message.message_type {
+                    BridgeMessageType::Hello => {
+                        let module = message.module.as_deref();
+                        let result = manager.handle_hello(module).await;
+                        bridge_response_from_action_result(BridgeMessageType::Ok, "hello", &result)
+                    }
+                    BridgeMessageType::Call => {
+                        let result = manager.handle_bridge_call(&message).await;
+                        if result.success {
+                            bridge_response_from_action_result(BridgeMessageType::Ok,
+                                message.module.as_deref().unwrap_or(""), &result)
+                        } else {
+                            bridge_response_from_action_result(BridgeMessageType::Error,
+                                message.module.as_deref().unwrap_or(""), &result)
+                        }
+                    }
+                    BridgeMessageType::Configure => {
+                        let result = manager.handle_configure(&message.payload).await;
+                        bridge_response_from_action_result(BridgeMessageType::Ok, "configure", &result)
+                    }
+                    _ => {
+                        BridgeMessage {
+                            message_type: BridgeMessageType::Error,
+                            module: None,
+                            channel: Some("system".to_string()),
+                            action: None,
+                            payload: serde_json::json!({"错误码": "UNSUPPORTED", "错误信息": format!("unsupported message type: {:?}", message.message_type)}),
+                        }
+                    }
+                };
+
+                let serialized = response.serialize();
+                if let Err(e) = write_frame(&mut stdout, &serialized).await {
+                    tracing::error!("Failed to write response: {}", e);
+                    break;
+                }
+            }
+            Err(e) => {
+                if e.to_string().contains("UnexpectedEof") {
+                    tracing::info!("stdin EOF, exiting bridge mode");
+                    break;
+                }
+                tracing::error!("Frame read error: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+fn bridge_response_from_action_result(msg_type: BridgeMessageType, channel: &str, result: &fa_tools::params::ActionResult) -> BridgeMessage {
+    let payload_str = match &result.output {
+        Some(s) => s.as_str(),
+        None => match &result.error {
+            Some(e) => e.as_str(),
+            None => "",
+        },
+    };
+    let payload: serde_json::Value = serde_json::from_str(payload_str)
+        .unwrap_or(serde_json::json!({"output": payload_str}));
+    BridgeMessage {
+        message_type: msg_type,
+        module: Some(channel.to_string()),
+        channel: None,
+        action: None,
+        payload,
+    }
 }

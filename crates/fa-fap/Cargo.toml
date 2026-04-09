@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "FAP package management, invoke engine, signing, and packing for FairyAction"
 
 [dependencies]
 serde = { workspace = true }
@@ -15,3 +16,10 @@ tracing = { workspace = true }
 dirs = { workspace = true }
 zip = "2"
 regex = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

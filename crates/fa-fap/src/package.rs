@@ -1,5 +1,6 @@
 use crate::error::FapError;
 use crate::manifest::Manifest;
+use crate::version::FapVersion;
 use std::io::Read;
 use std::path::Path;
 
@@ -9,7 +10,23 @@ pub struct PackageInfo {
     pub version: String,
 }
 
-pub async fn install_package(fap_path: &Path, install_dir: &Path) -> Result<Manifest, FapError> {
+pub struct VersionChange {
+    pub old_version: String,
+    pub new_version: String,
+}
+
+pub struct InstallResult {
+    pub manifest: Manifest,
+    pub signature_verified: bool,
+    pub signature_warning: Option<String>,
+    pub version_change: Option<VersionChange>,
+}
+
+pub async fn install_package(
+    fap_path: &Path,
+    install_dir: &Path,
+    verify_signature: bool,
+) -> Result<InstallResult, FapError> {
     let file = std::fs::File::open(fap_path).map_err(|e| {
         FapError::InvalidFapFile(format!("failed to open fap file: {e}"))
     })?;
@@ -34,6 +51,33 @@ pub async fn install_package(fap_path: &Path, install_dir: &Path) -> Result<Mani
     })?;
 
     let package_dir = install_dir.join(&manifest.package);
+
+    let version_change = if package_dir.exists() {
+        let old_manifest_path = package_dir.join("manifest.json");
+        if old_manifest_path.exists() {
+            let old_contents = std::fs::read_to_string(&old_manifest_path)?;
+            let old_manifest: Manifest = serde_json::from_str(&old_contents)?;
+            let old_ver = FapVersion::parse(&old_manifest.version);
+            let new_ver = FapVersion::parse(&manifest.version);
+            if let (Ok(old), Ok(new)) = (old_ver, new_ver) {
+                if old != new {
+                    Some(VersionChange {
+                        old_version: old_manifest.version,
+                        new_version: manifest.version.clone(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     std::fs::create_dir_all(&package_dir)?;
 
     for i in 0..archive.len() {
@@ -57,7 +101,33 @@ pub async fn install_package(fap_path: &Path, install_dir: &Path) -> Result<Mani
         }
     }
 
-    Ok(manifest)
+    let (signature_verified, signature_warning) = if verify_signature {
+        let sig_path = package_dir.join("signature.sig");
+        if sig_path.exists() {
+            match crate::sign::verify_package(&package_dir) {
+                Ok(true) => (true, None),
+                Ok(false) => {
+                    std::fs::remove_dir_all(&package_dir)?;
+                    return Err(FapError::Install("signature verification failed".to_string()));
+                }
+                Err(_) => {
+                    std::fs::remove_dir_all(&package_dir)?;
+                    return Err(FapError::Install("signature verification failed".to_string()));
+                }
+            }
+        } else {
+            (false, Some("包未签名，无法验证完整性".to_string()))
+        }
+    } else {
+        (false, None)
+    };
+
+    Ok(InstallResult {
+        manifest,
+        signature_verified,
+        signature_warning,
+        version_change,
+    })
 }
 
 pub async fn uninstall_package(package_name: &str, install_dir: &Path) -> Result<(), FapError> {
@@ -104,4 +174,56 @@ pub async fn inspect_package(package_name: &str, install_dir: &Path) -> Result<M
     let contents = std::fs::read_to_string(&manifest_path)?;
     let manifest: Manifest = serde_json::from_str(&contents)?;
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_install_result_fields() {
+        let manifest = Manifest {
+            format_version: 1,
+            package: "com.test.pkg".to_string(),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            mode: crate::manifest::PackageMode::Manifest,
+            platforms: vec!["windows-x86_64".to_string()],
+            entry: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("windows-x86_64".to_string(), "bin/test.exe".to_string());
+                map
+            },
+            capabilities: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("core".to_string(), vec![]);
+                map
+            },
+            permissions: vec![],
+            signature: None,
+            lifecycle: None,
+        };
+
+        let result = InstallResult {
+            signature_verified: false,
+            signature_warning: Some("包未签名，无法验证完整性".to_string()),
+            version_change: Some(VersionChange {
+                old_version: "0.9.0".to_string(),
+                new_version: "1.0.0".to_string(),
+            }),
+            manifest,
+        };
+
+        assert!(!result.signature_verified);
+        assert!(result.signature_warning.is_some());
+        assert_eq!(
+            result.signature_warning.as_deref(),
+            Some("包未签名，无法验证完整性")
+        );
+        let vc = result.version_change.unwrap();
+        assert_eq!(vc.old_version, "0.9.0");
+        assert_eq!(vc.new_version, "1.0.0");
+        assert_eq!(result.manifest.package, "com.test.pkg");
+        assert_eq!(result.manifest.version, "1.0.0");
+    }
 }

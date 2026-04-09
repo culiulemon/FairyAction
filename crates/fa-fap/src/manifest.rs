@@ -124,6 +124,11 @@ impl Manifest {
             errors.push("capabilities must not be empty for manifest mode".to_string());
         }
 
+        let perm_errors = crate::permission::validate_permissions(&self.permissions);
+        if let Err(invalid) = perm_errors {
+            errors.extend(invalid.into_iter().map(|p| format!("unknown permission: {p}")));
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -171,7 +176,7 @@ mod tests {
                     }
                 ]
             },
-            "permissions": ["fs.read"],
+            "permissions": ["filesystem.read"],
             "lifecycle": "oneshot"
         }"#
     }
@@ -268,5 +273,25 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| e.contains("capabilities must not be empty for manifest mode")));
+    }
+
+    #[test]
+    fn validate_invalid_permission() {
+        let json = r#"{
+            "format_version": 1,
+            "package": "com.test",
+            "name": "Test",
+            "version": "1.0.0",
+            "mode": "manifest",
+            "platforms": ["windows-x86_64"],
+            "entry": {"windows-x86_64": "bin/test.exe"},
+            "capabilities": {"core": []},
+            "permissions": ["filesystem.read", "evil.permission"]
+        }"#;
+        let manifest: Manifest = serde_json::from_str(json).unwrap();
+        let errors = manifest.validate().unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("unknown permission: evil.permission")));
     }
 }

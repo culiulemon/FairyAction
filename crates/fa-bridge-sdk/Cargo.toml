@@ -1,0 +1,17 @@
+[package]
+name = "fa-bridge-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "FairyAction Bridge SDK for FAP developers"
+keywords = ["fairyaction", "fap", "bridge", "sdk", "ai-agent"]
+categories = ["development-tools", "api-bindings"]
+readme = "README.md"
+repository = "https://gitcode.com/Nicek/FairyAction"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

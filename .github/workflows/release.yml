@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: fairy-action-windows-x86_64
+            ext: .exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: fairy-action-linux-x86_64
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: fairy-action-macos-arm64
+            ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: fairy-action-macos-x86_64
+            ext: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p fa-cli
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/fairy-action${{ matrix.ext }} release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/
+
+  publish-crates:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish fa-bridge-sdk
+        run: cargo publish -p fa-bridge-sdk --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-bridge
+        run: cargo publish -p fa-bridge --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-config
+        run: cargo publish -p fa-config --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-dom
+        run: cargo publish -p fa-dom --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-browser
+        run: cargo publish -p fa-browser --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-actor
+        run: cargo publish -p fa-actor --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-fap
+        run: cargo publish -p fa-fap --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+      - name: Publish fa-tools
+        run: cargo publish -p fa-tools --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+
+  github-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

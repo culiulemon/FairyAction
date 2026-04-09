@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "Bridge protocol engine for FairyAction (message framing, parsing, transport)"
 
 [dependencies]
 serde = { workspace = true }

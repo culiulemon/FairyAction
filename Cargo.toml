@@ -10,6 +10,7 @@ members = [
     "crates/fa-cli",
     "crates/fa-bridge",
     "crates/fa-fap",
+    "crates/fa-bridge-sdk",
 ]
 
 [workspace.package]
@@ -46,3 +47,4 @@ fa-actor = { path = "crates/fa-actor" }
 fa-tools = { path = "crates/fa-tools" }
 fa-bridge = { path = "crates/fa-bridge" }
 fa-fap = { path = "crates/fa-fap" }
+fa-bridge-sdk = { path = "crates/fa-bridge-sdk" }
