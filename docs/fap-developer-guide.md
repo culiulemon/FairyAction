@@ -3,17 +3,18 @@
 ## 目录
 
 - [1. 概述](#1-概述)
-- [2. 快速开始](#2-快速开始)
-- [3. 触桥协议详解](#3-触桥协议详解)
-- [4. manifest.json 规范](#4-manifestjson-规范)
-- [5. 开发模式](#5-开发模式)
-- [6. fa-bridge-sdk API 参考](#6-fa-bridge-sdk-api-参考)
-- [7. 内置解析器](#7-内置解析器)
-- [8. 打包工具链](#8-打包工具链)
-- [9. 权限系统](#9-权限系统)
-- [10. 签名与安全](#10-签名与安全)
-- [11. CLI 命令参考](#11-cli-命令参考)
-- [12. 最佳实践与 FAQ](#12-最佳实践与-faq)
+- [2. 安装与依赖](#2-安装与依赖)
+- [3. 快速开始](#3-快速开始)
+- [4. 触桥协议详解](#4-触桥协议详解)
+- [5. manifest.json 规范](#5-manifestjson-规范)
+- [6. 开发模式](#6-开发模式)
+- [7. fa-bridge-sdk API 参考](#7-fa-bridge-sdk-api-参考)
+- [8. 内置解析器](#8-内置解析器)
+- [9. 打包工具链](#9-打包工具链)
+- [10. 权限系统](#10-权限系统)
+- [11. 签名与安全](#11-签名与安全)
+- [12. CLI 命令参考](#12-cli-命令参考)
+- [13. 最佳实践与 FAQ](#13-最佳实践与-faq)
 
 ---
 
@@ -38,7 +39,39 @@ FAP（FairyAction Package）是 FairyAction 的扩展包格式，用于将原生
 
 ---
 
-## 2. 快速开始
+## 2. 安装与依赖
+
+### 安装 fairy-action CLI
+
+`fairy-action` 是 FAP 生态的工具链 CLI，提供 `fap install/sign/verify/pack` 等命令。
+
+```bash
+# 从 crates.io 安装
+cargo install fairy-action
+
+# 或从 GitHub Releases 下载预编译二进制
+# 访问 https://github.com/Nicek/FairyAction/releases
+```
+
+### 添加 fa-bridge-sdk 依赖
+
+使用 `fa-bridge-sdk` 开发 FAP 应用时，在你的 Rust 项目中添加依赖：
+
+```bash
+cargo add fa-bridge-sdk
+```
+
+或在 `Cargo.toml` 中添加：
+
+```toml
+[dependencies]
+fa-bridge-sdk = "0.1"
+serde_json = "1"
+```
+
+---
+
+## 3. 快速开始
 
 本节将引导你从零创建一个 FAP 应用。
 
@@ -239,7 +272,7 @@ bridge://call\x1Fcom.ffmpeg.fap\x1F图片转换\x1Fpng2jpg#{"质量":30}
 
 ---
 
-## 4. manifest.json 规范
+## 5. manifest.json 规范
 
 `manifest.json` 是 FAP 包的核心配置文件，定义了包的元数据、能力声明和调用方式。
 
@@ -883,7 +916,7 @@ shutdown → bye\n
 
 ---
 
-## 8. 打包工具链
+## 9. 打包工具链
 
 ### 8.1 完整打包流程
 
@@ -1214,7 +1247,7 @@ fairy-action bridge [--fap-install-dir <dir>] [--fap-temp-dir <dir>] [--fap-host
 
 ---
 
-## 12. 最佳实践与 FAQ
+## 13. 最佳实践与 FAQ
 
 ### 最佳实践
 
