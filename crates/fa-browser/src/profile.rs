@@ -46,37 +46,122 @@ impl BrowserProfile {
     }
 
     pub fn find_chrome_path() -> Option<String> {
-        let candidates: &[&str] = &[
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        ];
+        #[cfg(target_os = "windows")]
+        {
+            let candidates: &[&str] = &[
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            ];
 
-        for path in candidates {
-            if std::path::Path::new(path).exists() {
-                return Some(path.to_string());
+            for path in candidates {
+                if std::path::Path::new(path).exists() {
+                    return Some(path.to_string());
+                }
             }
-        }
 
-        if let Ok(output) = Command::new("where").arg("chrome").output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = path.lines().next() {
-                    if !first_line.trim().is_empty() {
-                        return Some(first_line.trim().to_string());
+            if let Ok(output) = Command::new("where").arg("chrome").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    if let Some(first_line) = path.lines().next() {
+                        if !first_line.trim().is_empty() {
+                            return Some(first_line.trim().to_string());
+                        }
                     }
                 }
             }
         }
 
-        if let Ok(output) = Command::new("which").arg("google-chrome").output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = path.lines().next() {
-                    if !first_line.trim().is_empty() {
-                        return Some(first_line.trim().to_string());
+        #[cfg(target_os = "linux")]
+        {
+            let candidates: &[&str] = &[
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/google-chrome-beta",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+                "/snap/bin/chromium",
+                "/snap/bin/google-chrome",
+                "/usr/bin/brave-browser",
+                "/usr/bin/brave",
+                "/usr/bin/microsoft-edge",
+                "/usr/bin/microsoft-edge-stable",
+            ];
+
+            for path in candidates {
+                if std::path::Path::new(path).exists() {
+                    return Some(path.to_string());
+                }
+            }
+
+            if let Ok(output) = Command::new("which").arg("google-chrome").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    if let Some(first_line) = path.lines().next() {
+                        if !first_line.trim().is_empty() {
+                            return Some(first_line.trim().to_string());
+                        }
+                    }
+                }
+            }
+
+            if let Ok(output) = Command::new("which").arg("chromium-browser").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    if let Some(first_line) = path.lines().next() {
+                        if !first_line.trim().is_empty() {
+                            return Some(first_line.trim().to_string());
+                        }
+                    }
+                }
+            }
+
+            if let Ok(output) = Command::new("which").arg("chromium").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    if let Some(first_line) = path.lines().next() {
+                        if !first_line.trim().is_empty() {
+                            return Some(first_line.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let candidates: &[&str] = &[
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            ];
+
+            for path in candidates {
+                if std::path::Path::new(path).exists() {
+                    return Some(path.to_string());
+                }
+            }
+
+            if let Ok(output) = Command::new("mdfind")
+                .args(&["kMDKind", "==", "com.google.chrome"])
+                .output()
+            {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout);
+                    if let Some(first_line) = path.lines().next() {
+                        if !first_line.trim().is_empty() {
+                            let chrome_path = format!(
+                                "{}/Contents/MacOS/Google Chrome",
+                                first_line.trim()
+                            );
+                            if std::path::Path::new(&chrome_path).exists() {
+                                return Some(chrome_path);
+                            }
+                        }
                     }
                 }
             }

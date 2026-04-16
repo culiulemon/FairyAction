@@ -5,6 +5,11 @@
     "build": "cargo build",
     "build:release": "cargo build --release",
     "build:all": "cargo build --release -p fa-cli -p fa-tester",
+    "build:x64": "cargo build --release --target x86_64-pc-windows-msvc",
+    "build:arm64": "cargo build --release --target aarch64-pc-windows-msvc",
+    "build:linux": "cargo build --release --target x86_64-unknown-linux-gnu",
+    "build:macos-arm": "cargo build --release --target aarch64-apple-darwin",
+    "build:macos-intel": "cargo build --release --target x86_64-apple-darwin",
     "test": "cargo test",
     "run": "cargo run -- -p fa-cli",
     "clean": "cargo clean"
