@@ -28,7 +28,8 @@ FAP（FairyAction Package）是 FairyAction 的扩展包格式，用于将原生
 | -------------------------- | ---------------------------------------------------- |
 | **包（Package）**             | 一个 ZIP 格式的 `.fap` 文件，包含 `manifest.json`、平台二进制文件和资源文件 |
 | **能力域（Capability Domain）** | 包内的功能分组，例如 "图片转换"、"文件操作"                             |
-| **动作（Action）**             | 能力域内的具体操作，例如 "png2jpg"、"read"                        |
+| **能力池（Capabilities）**   | 一个包中所有能力域的集合，即 `manifest.json` 中的 `capabilities` 对象          |
+| **动作（Action）**           | 能力域内的具体操作，例如 "png2jpg"、"read"                                |
 | **触桥（Bridge）协议**           | FAP 应用与宿主（FairyAction 运行时）之间的通信协议                    |
 | **开发模式**                   | 零代码模式（Manifest Mapping）和 SDK 模式（fa-bridge-sdk）       |
 
@@ -468,7 +469,7 @@ bridge://call\x1Fcom.ffmpeg.fap\x1F图片转换\x1Fpng2jpg#{"质量":30}
 | `{{宿主数据目录}}`   | 替换为宿主数据目录路径（需通过 `--fap-host-data-dir` 配置） |
 | `{{来源路径的父目录}}` | 替换为包目录的父目录路径                              |
 
-> **⚠️ 重要：`args` 是传给二进制的参数，不是命令本身**
+> **⚠️ 重要：`args`** **是传给二进制的参数，不是命令本身**
 >
 > `entry` 字段已经指定了要执行的可执行文件路径，`invoke.args` 只需要放**传给该二进制的命令行参数**。
 >
