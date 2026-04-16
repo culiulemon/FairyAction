@@ -1,540 +1,248 @@
 # FairyAction
 
-AI Agent 的浏览器自动化基础设施，使用 Rust 构建。通过 JSON 协议暴露精细的浏览器控制接口，供外部 AI Agent 调用。
+**AI Agent 能力编排平台** — 使用 Rust 构建。将浏览器自动化、文件操作、系统工具等能力封装为统一的触桥协议接口，供 AI Agent 调用。通过 FAP（FairyAction Package）生态，任何开发者都可以扩展 AI Agent 的能力边界。
+
+## 核心架构
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    AI Agent / 宿主软件                 │
+└──────────────────────┬──────────────────────────────┘
+                       │ 触桥协议 (stdin/stdout)
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│              FairyAction 编排器 (fa-cli)              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+│  │ 浏览器控制 │  │ FAP 包管理 │  │  更多能力扩展...   │   │
+│  │ 22个动作  │  │ 安装/调用  │  │  (第三方 FAP 包)  │   │
+│  └──────────┘  └──────────┘  └──────────────────┘   │
+└─────────────────────────────────────────────────────┘
+```
 
 ## 特性
 
+### 内置能力：浏览器自动化
+
 - **JSON 协议接口** — stdin/stdout 交互，外部 Agent 发送 JSON 指令即可控制浏览器
-- **22 个内置动作** — 导航、点击、输入、滚动、标签页管理、文件操作、标注覆盖、浏览器状态检查等
-- **智能 DOM 提取** — 层级化 DOM 表示，区分可交互/不可交互元素，中文类型名
-- **交互性检测** — 自动识别按钮、链接、输入框等可交互元素，仅对可交互元素分配操作索引
-- **元素标注覆盖层** — 在浏览器中以线框标注所有可交互元素的位置与索引
-- **路由变化感知** — 自动检测 URL 变化并刷新 DOM 树
-- **真实鼠标事件** — 模拟真实用户点击，支持 Vue/React 等前端框架
-- **动作状态追踪** — 执行动作后返回完整的页面状态快照（URL、标题、标签页数、导航检测等）
-- **结构化搜索结果** — 支持 Google、Bing、百度、DuckDuckGo 搜索，自动提取标题、URL、摘要，无需 API Key
-- **搜索调试信息** — 搜索结果为空时自动附加调试信息，帮助排查提取失败原因
-- **浏览器状态检查** — 支持通过 `start` 动作检测浏览器运行状态，已启动时返回当前页面信息而不重复启动
-- **截图路径返回** — 截图保存到指定目录（可配置），返回文件路径便于 AI Agent 引用
+- **22 个内置动作** — 导航、点击、输入、滚动、标签页管理、文件操作、标注覆盖等
+- **智能 DOM 提取** — 层级化 DOM 表示，区分可交互/不可交互元素
+- **结构化搜索结果** — 支持 Google、Bing、百度、DuckDuckGo，无需 API Key
 - **多标签页管理** — 自动检测新标签页、切换 CDP 连接
-- **URL 自动补全** — 自动为缺少协议的 URL 补全 `https://`
-- **浏览器身份** — 默认窗口标题 "FairyBrowser"，默认用户 Profile "Fairy"
 - **TUI 测试器** — 交互式终端界面，实时查看 DOM 树、手动操控浏览器
+
+### 扩展能力：FAP 生态
+
+- **FAP 包格式** — 将任何 CLI 工具或自定义程序包装为 AI Agent 可调用的能力单元
+- **零代码模式** — 通过 manifest.json 直接映射 CLI 工具参数，无需编写代码
+- **SDK 模式** — 使用 [`fa-bridge-sdk`](https://crates.io/crates/fa-bridge-sdk) Rust crate 开发复杂 FAP 应用
+- **触桥协议** — `bridge://<type>\x1F<module>\x1F<channel>\x1F<action>#<JSON>` 统一通信格式
+- **打包工具链** — `fap keygen/sign/verify/pack` 完整的签名和发布流程
+- **权限与安全** — Ed25519 签名验证、权限声明系统、版本管理
+
+## 快速开始
+
+### 安装
+
+```bash
+# 从源码编译
+git clone https://gitcode.com/Nicek/FairyAction.git
+cd FairyAction
+cargo build --release
+
+# 或从 crates.io 安装 CLI
+cargo install fairy-action
+```
+
+### 浏览器自动化
+
+```bash
+# 启动浏览器交互模式
+fairy-action run --show-browser
+
+# 通过 stdin 发送 JSON 指令
+{"type": "execute", "action": "navigate", "params": {"url": "https://example.com"}}
+{"type": "execute", "action": "click", "params": {"index": 5}}
+{"type": "get_dom"}
+```
+
+### 安装 FAP 包
+
+```bash
+# 安装一个 FAP 包
+fairy-action fap install ./com.ffmpeg.fap
+
+# 查看已安装的包
+fairy-action fap list
+
+# 调用 FAP 包中的动作
+fairy-action fap run com.ffmpeg.fap 图片转换 png2jpg '{"输入":"a.png","输出":"b.jpg"}'
+```
+
+### 开发 FAP 应用
+
+使用 `fa-bridge-sdk` 开发自定义 FAP 应用：
+
+```bash
+cargo add fa-bridge-sdk
+```
+
+```rust
+use fa_bridge_sdk::{App, Domain, Action, Lifecycle};
+use serde_json::Value;
+
+fn main() {
+    let app = App::new()
+        .name("my-tool")
+        .version("1.0.0")
+        .lifecycle(Lifecycle::Oneshot)
+        .domain(
+            Domain::new("图片转换")
+                .action(Action::new("png2jpg", |_ctx, params| {
+                    let input = params["输入"].as_str().unwrap();
+                    Ok(Value::String(format!("converted: {}", input)))
+                }))
+        );
+    app.run();
+}
+```
+
+> 📖 完整的开发者文档请参阅 [FAP 开发者指南](docs/fap-developer-guide.md)
 
 ## 平台支持
 
-FairyAction 支持以下平台：
-
-| 平台 | 架构 | 发布构建 | 自动检测浏览器 |
-|------|------|---------|---------------|
+| 平台 | 架构 | 浏览器自动化 | FAP 支持 |
+|------|------|-------------|---------|
 | Windows | x86_64 | ✅ | ✅ |
 | Windows | ARM64 | ✅ | ✅ |
 | Linux | x86_64 | ✅ | ✅ |
 | macOS | ARM (M1/M2/M3) | ✅ | ✅ |
 | macOS | Intel | ✅ | ✅ |
 
-### 支持的浏览器
-
-FairyAction 会自动检测以下浏览器：
-
-**Windows**:
-- Google Chrome
-- Brave Browser
-- Microsoft Edge
-
-**Linux**:
-- Google Chrome / Chrome Beta
-- Chromium / Chromium Browser
-- Brave Browser
-- Microsoft Edge
-- Snap 版本的 Chrome/Chromium
-
-**macOS**:
-- Google Chrome / Chrome Canary
-- Chromium
-- Brave Browser
-- Microsoft Edge
-
-## 快速开始
-
-### 安装依赖
-
-- [Rust](https://rustup.rs/) 1.85+
-- [Chrome/Chromium](https://www.google.com/chrome/) 浏览器
-
-### 编译
-
-```bash
-git clone https://github.com/your-username/FairyAction.git
-cd FairyAction
-cargo build --release
-```
-
-### 配置
-
-创建 `.env` 文件或在 `~/.config/fairy-action/config.json` 中配置：
-
-```bash
-FA_BROWSER_CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
-FA_BROWSER_HEADLESS=true
-FA_SCREENSHOT_DIR=C:\Screenshots
-FA_DOWNLOAD_DIR=C:\Downloads
-```
-
-也可以通过 CLI 管理：
-
-```bash
-fairy-action config init                          # 初始化配置文件
-fairy-action config show                          # 查看当前配置
-fairy-action config set browser.headless false    # 显示浏览器窗口
-```
-
 ## CLI 命令
 
 ```
 fairy-action [OPTIONS] <COMMAND>
 
-Options:
-  -c, --config <FILE>     指定配置文件路径
-  -v, --verbose           启用详细日志（输出到 stderr）
-  -q, --quiet             静默模式，不输出任何日志
-  -h, --help              显示帮助
-  -V, --version           显示版本
-
 Commands:
-  run              启动浏览器，通过 stdin/stdout JSON 协议接收动作指令
-  list-actions     列出所有可用动作及其参数定义
-  tester           启动交互式 TUI 测试器
-  config           配置管理
-```
-
-## JSON 协议接口
-
-### 启动
-
-```bash
-fairy-action run
-fairy-action run --show-browser    # 显示浏览器窗口
-fairy-action run --quiet --show-browser  # 作为子进程集成时使用（无日志干扰）
-```
-
-启动后通过 **stdin** 接收 JSON 请求，通过 **stdout** 返回 JSON 响应。所有日志输出到 **stderr**，不会污染 JSON 通信管道。
-
-### 请求格式
-
-```jsonc
-// 执行动作
-{"type": "execute", "action": "navigate", "params": {"url": "https://example.com"}}
-
-// 获取浏览器状态（含视口和滚动位置）
-{"type": "get_state"}
-
-// 获取当前页面 DOM（show_empty 为 true 时显示空区块）
-{"type": "get_dom"}
-{"type": "get_dom", "show_empty": true}
-
-// 列出可用动作
-{"type": "list_actions"}
-
-// 切换元素标注覆盖层（show 为 true/false/null）
-{"type": "toggle_annotations"}
-{"type": "toggle_annotations", "show": true}
-
-// 关闭浏览器
-{"type": "close"}
-```
-
-### 响应格式
-
-```jsonc
-// 检查浏览器状态
-{
-  "type": "ok",
-  "action": "start",
-  "result": {
-    "success": true,
-    "output": "浏览器已启动\n当前页面: https://example.com\n标题: Example\n标签页数量: 2\n标签页列表:\n  [0] Example — https://example.com\n  [1] Google — https://google.com"
-  }
-}
-// 动作执行成功
-{
-  "type": "ok",
-  "action": "click",
-  "result": {
-    "success": true,
-    "output": "Clicked element [5]",
-    "is_done": false,
-    "state_after": {
-      "url": "https://example.com/page",
-      "title": "Page Title",
-      "tab_count": 1,
-      "new_tab_opened": true,
-      "navigation_occurred": true
-    }
-  }
-}
-
-// 动作执行失败
-{"type": "ok", "action": "click", "result": {"success": false, "error": "Element with index 99 not found"}}
-
-// 浏览器状态（含视口和滚动信息）
-{"type": "state", "url": "https://example.com", "title": "Example", "viewport": {"width": 1280, "height": 720}, "scroll": {"x": 0, "y": 300}, "tabs": [...]}
-
-// DOM 内容（层级化表示）
-{"type": "dom", "url": "https://example.com", "title": "Example", "representation": "...", "element_count": 42}
-
-// 动作列表
-{"type": "actions", "actions": [...], "schema": {...}}
-
-// 错误
-{"type": "error", "message": "Unknown action: 'xxx'"}
-
-// 关闭确认
-{"type": "closed"}
-```
-
-### 集成示例
-
-外部 AI Agent 的典型集成流程：
-
-```bash
-# 启动 FairyAction（作为子进程，--quiet 禁用日志，--show-browser 显示浏览器）
-fairy-action run --quiet --show-browser
-```
-
-```
-1. 通过 stdin 发送 {"type": "list_actions"} 获取可用动作
-2. 通过 stdin 发送 {"type": "get_dom"} 获取页面 DOM
-3. 根据任务需求，发送 {"type": "execute", "action": "click", "params": {"index": 5}} 执行操作
-4. 从 stdout 读取 JSON 响应，检查 state_after 判断操作效果
-5. 重复 2-4 直到任务完成
-6. 发送 {"type": "close"} 关闭浏览器
-```
-
-## DOM 表示格式
-
-DOM 以层级化文本表示，使用 2 空格缩进体现包含关系：
-
-### 元素分类
-
-- **可交互元素**（带 `[index]`）— 按钮输入框等，AI 可通过 index 直接操作
-- **语义元素**（无 index）— 标题段落等，只读展示，帮助 AI 理解页面上下文
-
-### 输出示例
-
-```
-[0] 导航：首页 产品 关于
-  [1] 按钮：登录
-  [2] 按钮：注册
-标题：欢迎使用 FairyAction
-段落：AI Agent 的浏览器自动化基础设施
-  [5] 输入框：搜索关键词
-  [6] 按钮：搜索
-表格：价格列表
-  [7] 按钮：查看详情
-  [8] 按钮：加入购物车
-```
-
-### 类型名称映射
-
-| HTML 标签 | 显示名 | HTML 标签 | 显示名 |
-|-----------|--------|-----------|--------|
-| `a` | 链接 | `input` | 输入框 |
-| `button` | 按钮 | `textarea` | 文本框 |
-| `select` | 下拉框 | `option` | 选项 |
-| `img` | 图片 | `video` | 视频 |
-| `h1`-`h6` | 标题 | `p` | 段落 |
-| `span` | 文字 | `div` | 区块 |
-| `table` | 表格 | `form` | 表单 |
-| `nav` | 导航 | `li` | 列表项 |
-| `label` | 标签 | `dialog` | 对话框 |
-| `details` | 折叠面板 | `summary` | 折叠标题 |
-
-### 交互性判断
-
-元素被判定为**可交互**（分配 index）的条件：
-- 属于交互标签（`a`、`button`、`input`、`textarea`、`select` 等）
-- 具有 `onclick` 事件处理
-- `role` 属性为 `button`、`link`、`textbox` 等
-- 具有 `tabindex` 属性
-- CSS 样式包含 `cursor: pointer`
-
-## 可用动作（共 22 个）
-
-### 导航类
-
-| 动作 | 参数 | 说明 |
-|------|------|------|
-| `navigate` | `url` (必填), `new_tab` (可选) | 导航到 URL（自动补全 https://） |
-| `go_back` | — | 浏览器后退 |
-| `go_forward` | — | 浏览器前进 |
-| `reload` | — | 刷新页面 |
-| `search` | `query` (必填), `engine` (可选, 默认 bing, 可选值: bing/baidu/google/duckduckgo) | 搜索引擎搜索，返回结构化结果（标题、URL、摘要） |
-
-### 交互类
-
-| 动作 | 参数 | 说明 |
-|------|------|------|
-| `click` | `index` (必填) | 点击指定索引的元素 |
-| `input` | `index` (必填), `text` (必填), `clear` (可选) | 向元素输入文本 |
-| `scroll` | `direction` (可选, 默认 down), `amount` (可选), `index` (可选) | 滚动页面 |
-| `send_keys` | `keys` (必填) | 发送按键（如 `Enter`, `Control+a`） |
-| `select_option` | `index` (必填), `value` (必填) | 选择下拉选项 |
-
-### 页面类
-
-| 动作 | 参数 | 说明 |
-|------|------|------|
-| `screenshot` | `index` (可选) | 截取页面/元素截图 |
-| `extract` | `query` (可选) | 提取页面文本内容 |
-| `switch_tab` | `index` (必填) | 切换标签页 |
-| `close_tab` | `index` (可选) | 关闭标签页 |
-| `new_tab` | `url` (可选) | 打开新标签页（自动补全 https://） |
-| `evaluate` | `code` (必填) | 执行 JavaScript |
-| `toggle_annotations` | `show` (可选) | 切换元素标注覆盖层 |
-
-### 文件类
-
-| 动作 | 参数 | 说明 |
-|------|------|------|
-| `save_to_file` | `file_name` (必填), `content` (必填) | 保存文件 |
-| `read_file` | `file_name` (必填) | 读取文件 |
-
-### 元动作
-
-| 动作 | 参数 | 说明 |
-|------|------|------|
-| `start` | `show_browser` (可选) | 检查浏览器状态，已启动则返回当前页面信息（URL、标题、标签页列表），不会重启浏览器 |
-| `wait` | `seconds` (可选, 默认 3, 最大 30) | 等待 |
-| `done` | `text` (必填), `success` (可选) | 标记任务完成 |
-
-## 配置参考
-
-### 浏览器配置
-
-| 环境变量 | 默认值 | 说明 |
-|----------|--------|------|
-| `FA_BROWSER_HEADLESS` | `true` | 无头模式 |
-| `FA_BROWSER_VIEWPORT_WIDTH` | `1280` | 视口宽度 |
-| `FA_BROWSER_VIEWPORT_HEIGHT` | `720` | 视口高度 |
-| `FA_BROWSER_CHROME_PATH` | 自动检测 | Chrome 可执行文件路径 |
-| `FA_BROWSER_PROXY` | — | 代理地址 |
-| `FA_BROWSER_USER_DATA_DIR` | — | 用户数据目录 |
-| `FA_BROWSER_PROFILE_NAME` | `Fairy` | Chrome Profile 名称 |
-| `FA_BROWSER_APP_TITLE` | `FairyBrowser` | 浏览器窗口标题 |
-| `FA_DEFAULT_SEARCH_ENGINE` | `bing` | 默认搜索引擎（google/bing/baidu/duckduckgo） |
-| `FA_SCREENSHOT_DIR` | — | 截图保存目录（默认系统临时目录） |
-| `FA_DOWNLOAD_DIR` | — | 文件下载目录（默认系统临时目录） |
-
-默认使用独立的用户数据目录 `%TEMP%\FairyBrowser`，Profile 名为 "Fairy"，窗口标题为 "FairyBrowser"。
-
-### 搜索配置
-
-默认搜索引擎为 `bing`，可通过以下方式修改：
-
-```bash
-# 配置文件（JSON）
-{"default_search_engine": "google"}
-
-# 环境变量
-FA_DEFAULT_SEARCH_ENGINE=google fairy-action run
-
-# CLI 命令
-fairy-action config set default_search_engine google
-```
-
-### 截图与下载目录配置
-
-截图保存目录和文件下载目录支持通过配置文件、环境变量或 CLI 命令设置，未配置时默认使用系统临时目录。
-
-```bash
-# 配置文件（JSON）
-{
-  "screenshot_dir": "/path/to/screenshots",
-  "download_dir": "/path/to/downloads"
-}
-
-# 环境变量
-FA_SCREENSHOT_DIR=/path/to/screenshots FA_DOWNLOAD_DIR=/path/to/downloads fairy-action run
-
-# CLI 命令
-fairy-action config set screenshot_dir /path/to/screenshots
-fairy-action config set download_dir /path/to/downloads
-```
-
-## TUI 测试器
-
-```bash
-fairy-action tester
-# 或
-cargo run --bin fa-tester
-```
-
-### 命令列表
-
-| 命令 | 缩写 | 用法 | 说明 |
-|------|------|------|------|
-| `navigate` | `nav` | `navigate https://example.com` | 导航到 URL（自动补全协议） |
-| `click` | — | `click 5` | 点击指定索引的元素 |
-| `input` | — | `input 3 hello world` | 在元素中输入文本 |
-| `scroll` | — | `scroll down 500` | 滚动页面（up/down + 像素） |
-| `press` | `send_keys` | `press Enter` | 发送按键 |
-| `screenshot` | `ss` | `screenshot` | 截取屏幕截图 |
-| `back` | — | `back` | 浏览器后退 |
-| `forward` | `fwd` | `forward` | 浏览器前进 |
-| `reload` | `refresh` | `reload` | 刷新页面 |
-| `tab-new` | — | `tab-new https://example.com` | 新建标签页（自动补全协议） |
-| `tab-switch` | — | `tab-switch 0` | 切换到指定标签页 |
-| `tab-close` | — | `tab-close 1` | 关闭指定标签页 |
-| `eval` | `js` | `eval document.title` | 执行 JavaScript |
-| `find` | — | `find 关键词` | 在页面中搜索文本 |
-| `dom` | — | `dom` | 刷新 DOM 树 |
-| `url` | — | `url` | 显示当前 URL |
-| `title` | — | `title` | 显示页面标题 |
-| `clear` | — | `clear` | 清除日志 |
-| `annotate` | `ann` | `ann` | 切换元素标注覆盖层 |
-| `help` | `?` | `help` | 切换帮助面板 |
-| `quit` | `exit` | `quit` | 退出 |
-
-### 快捷键
-
-| 快捷键 | 功能 |
-|--------|------|
-| `F5` | 刷新 DOM 树 |
-| `Ctrl+R` | 刷新页面 |
-| `Ctrl+D` | 截图 |
-| `Ctrl+N` | 新标签页 |
-| `Ctrl+W` | 关闭标签页 |
-| `Ctrl+T` | 切换元素标注覆盖层 |
-| `Ctrl+C` | 退出 |
-| `PageUp / PageDown` | 滚动 DOM 树视图 |
-| `Shift + Up/Down` | DOM 树逐行滚动 |
-| `Shift + Home/End` | DOM 树跳到顶部/底部 |
-| `Enter` | 执行命令 |
-| `Esc` | 清空命令输入 |
-
-### 智能特性
-
-- **路由变化自动刷新** — 每秒检测一次 URL，页面跳转时自动刷新 DOM 树和状态栏
-- **URL 自动补全** — 输入 `navigate www.baidu.com` 会自动补全为 `https://www.baidu.com`
-
-### TUI 界面布局
-
-```
-+--------------------------------------------------------------------+
-|  FairyAction Tester  https://example.com | Page Title               |
-+----------------------------------------+---------------------------+
-|                                        |  Status                    |
-|  DOM Tree (F5 refresh, PgUp/PgDn)     |  URL: ...                  |
-|                                        |  Title: ...                |
-|  [0] 导航：首页 产品                    |  Tab: 1/3                  |
-|    [1] 按钮：登录                       |                            |
-|    [2] 按钮：注册                       +---------------------------+
-|  标题：欢迎使用                          |  Log                       |
-|  段落：AI Agent 的浏览器自动化            |  > Clicked element [1]     |
-|    [5] 输入框：搜索关键词                |  > URL changed: ...        |
-|    [6] 按钮：搜索                       |  > DOM refreshed: 42       |
-|                                        |  > interactive elements    |
-+----------------------------------------+---------------------------+
-|  Command (type 'help' for commands) > _                          |
-+--------------------------------------------------------------------+
+  run                启动浏览器自动化（stdin/stdout JSON 协议）
+  list-actions       列出所有可用动作
+  tester             启动交互式 TUI 测试器
+  config             配置管理
+  fap                FAP 包管理子命令
+  bridge             触桥协议交互模式
+
+FAP 子命令:
+  fap install        安装 FAP 包
+  fap uninstall      卸载 FAP 包
+  fap list           列出已安装的 FAP 包
+  fap inspect        查看包详细信息
+  fap run            直接运行 FAP 包中的动作
+  fap keygen         生成 Ed25519 密钥对
+  fap sign           签名 FAP 包
+  fap verify         验证 FAP 包签名
+  fap pack           打包 FAP 包目录为 .fap 文件
 ```
 
 ## 项目结构
 
 ```
 FairyAction/
-+-- crates/
-|   +-- fa-cli/        # CLI 入口 (clap), JSON 协议接口
-|   +-- fa-tester/     # TUI 测试器 (ratatui + crossterm)
-|   +-- fa-browser/    # 浏览器控制 (CDP WebSocket)
-|   +-- fa-dom/        # DOM 解析与序列化
-|   +-- fa-actor/      # 页面元素操作抽象 (Page/Element/Mouse)
-|   +-- fa-tools/      # 动作注册表与执行引擎
-|   +-- fa-config/     # 配置管理
-+-- .env               # 环境变量配置
-+-- Cargo.toml         # Workspace 根配置
+├── crates/
+│   ├── fa-cli/           # CLI 入口 + 触桥协议交互模式
+│   ├── fa-bridge/        # 触桥协议引擎（消息封装、帧协议、传输）
+│   ├── fa-bridge-sdk/    # 开发者 SDK（独立 crate，已发布到 crates.io）
+│   ├── fa-fap/           # FAP 包管理（manifest、invoke、签名、打包、权限）
+│   ├── fa-browser/       # 浏览器控制 (CDP WebSocket)
+│   ├── fa-dom/           # DOM 解析与序列化
+│   ├── fa-actor/         # 页面元素操作抽象
+│   ├── fa-tools/         # 动作注册表与执行引擎 + FapManager
+│   ├── fa-config/        # 配置管理 + FapConfig
+│   └── fa-tester/        # TUI 测试器
+├── docs/
+│   └── fap-developer-guide.md  # FAP 开发者指南
+└── Cargo.toml
 ```
 
-### 依赖关系
+## 浏览器自动化详细文档
+
+### 支持的浏览器
+
+**Windows**: Google Chrome, Brave Browser, Microsoft Edge
+**Linux**: Google Chrome, Chromium, Brave Browser, Microsoft Edge
+**macOS**: Google Chrome, Chromium, Brave Browser, Microsoft Edge
+
+### 请求格式
+
+```jsonc
+{"type": "execute", "action": "navigate", "params": {"url": "https://example.com"}}
+{"type": "execute", "action": "click", "params": {"index": 5}}
+{"type": "execute", "action": "input", "params": {"index": 3, "text": "hello"}}
+{"type": "get_state"}
+{"type": "get_dom"}
+{"type": "close"}
+```
+
+### 可用动作（22 个）
+
+| 类别 | 动作 | 说明 |
+|------|------|------|
+| 导航 | `navigate` `go_back` `go_forward` `reload` `search` | 页面导航和搜索引擎搜索 |
+| 交互 | `click` `input` `scroll` `send_keys` `select_option` | 元素交互操作 |
+| 页面 | `screenshot` `extract` `switch_tab` `close_tab` `new_tab` `evaluate` `toggle_annotations` | 页面信息和管理 |
+| 文件 | `save_to_file` `read_file` | 文件读写 |
+| 元动作 | `start` `wait` `done` | 状态检查和任务管理 |
+
+### DOM 表示
 
 ```
-fa-cli
-  +-- fa-config
-  +-- fa-browser
-  +-- fa-dom
-  +-- fa-tools
-      +-- fa-browser
-      +-- fa-actor
-      +-- fa-dom
-
-fa-tester
-  +-- fa-config
-  +-- fa-browser
-  +-- fa-dom
+[0] 导航：首页 产品 关于
+  [1] 按钮：登录
+  [2] 按钮：注册
+标题：欢迎使用 FairyAction
+段落：AI Agent 能力编排平台
+  [5] 输入框：搜索关键词
+  [6] 按钮：搜索
 ```
+
+可交互元素带 `[index]`，AI Agent 可直接通过 index 操作。
+
+### 配置
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `FA_BROWSER_HEADLESS` | `true` | 无头模式 |
+| `FA_BROWSER_CHROME_PATH` | 自动检测 | Chrome 路径 |
+| `FA_BROWSER_VIEWPORT_WIDTH` | `1280` | 视口宽度 |
+| `FA_BROWSER_VIEWPORT_HEIGHT` | `720` | 视口高度 |
+| `FA_DEFAULT_SEARCH_ENGINE` | `bing` | 默认搜索引擎 |
+| `FA_SCREENSHOT_DIR` | 系统临时目录 | 截图保存目录 |
+| `FA_DOWNLOAD_DIR` | 系统临时目录 | 文件下载目录 |
+
+```bash
+fairy-action config init                          # 初始化配置
+fairy-action config show                          # 查看配置
+fairy-action config set browser.headless false    # 修改配置
+```
+
+### TUI 测试器
+
+```bash
+fairy-action tester
+```
+
+交互式终端界面，支持实时 DOM 查看、命令操作、快捷键控制。
 
 ## 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| 语言 | Rust (Edition 2024) |
+| 语言 | Rust (Edition 2024, MSRV 1.85) |
 | 异步运行时 | Tokio |
-| 浏览器控制 | CDP (Chrome DevTools Protocol) via tokio-tungstenite |
+| 浏览器控制 | CDP via tokio-tungstenite |
+| 签名算法 | Ed25519 (ed25519-dalek) |
 | TUI 框架 | ratatui + crossterm |
-| HTTP 客户端 | reqwest (rustls) |
 | CLI 解析 | clap |
 | 序列化 | serde + serde_json |
-| 日志 | tracing + tracing-subscriber |
-
-## 未来规划
-
-以下功能正在规划中，欢迎贡献或提出需求。
-
-### 桌面应用自动化
-
-当前版本仅支持 Chrome/Chromium 内核浏览器。下一阶段目标是支持**桌面应用 GUI 自动化**，让 AI Agent 能够操控任意 Windows/macOS 应用：
-
-| 阶段 | 技术方案 | 说明 |
-|------|---------|------|
-| Windows 浏览器 | WinRT / UIAutomation | 除 Chrome 外，支持 Edge、Brave、Firefox |
-| Windows 桌面应用 | Win32 API / UI Automation | 捕获窗口、控件树、模拟输入 |
-| macOS | Accessibility API | 支持 Safari、桌面应用 |
-| macOS iOS 模拟器 | XCTest / WebDriverAgent | iOS 应用自动化 |
-
-### 平台扩展
-
-| 目标 | 说明 |
-|------|------|
-| Linux 浏览器支持 | Ubuntu/Debian 上的 Chrome、Firefox |
-| iOS Safari | Remote Debugger + CDP 协议模拟 |
-| Android Chrome | ADB + Chrome DevTools Protocol |
-| 移动端真机/模拟器 | Appium 协议兼容层 |
-
-### 功能增强
-
-| 功能 | 说明 |
-|------|------|
-| 文件上传/下载 | 拦截文件选择对话框，支持自动化文件上传 |
-| Cookie / Storage 管理 | 导出/导入 Cookie、localStorage、sessionStorage |
-| 网络请求拦截 | 监听、修改、阻断 XHR/Fetch 请求 |
-| 视觉理解 | 结合多模态模型（GPT-4V、Claude Vision）理解页面截图 |
-| 自主导航 | Agent 自主决策下一步操作，无需人工每步干预 |
-| 会话状态持久化 | 跨进程保持登录状态、Cookie、localStorage |
-| 插件/脚本注入 | 自动化注入油猴脚本或浏览器扩展 |
-
-### 多浏览器支持
-
-当前默认使用 Chrome，未来计划通过统一的抽象层同时支持：
-
-- **Microsoft Edge** — Chromium 内核，Remote Debugging Protocol
-- **Brave** — Chromium 内核
-- **Firefox** — Marionette / WebDriver（架构不同，需独立适配）
-- **Arc** — 基于 Chromium
-
-所有浏览器共用同一套 JSON 协议接口，外部 Agent 无需关心底层实现。
-
----
 
 ## License
 
