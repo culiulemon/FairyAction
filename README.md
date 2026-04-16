@@ -2,6 +2,11 @@
 
 **AI Agent 能力编排平台** — 使用 Rust 构建。将浏览器自动化、文件操作、系统工具等能力封装为统一的触桥协议接口，供 AI Agent 调用。通过 FAP（FairyAction Package）生态，任何开发者都可以扩展 AI Agent 的能力边界。
 
+## 📚 文档
+
+- [FAP 开发者指南](docs/FAP%20开发者指南.md) — 触桥协议、manifest.json 规范、SDK API、打包工具链完整指南
+- [FairyAction 集成指南](docs/FairyAction集成指南.md) — 将 FairyAction 集成到你的应用中的完整指南
+
 ## 核心架构
 
 ```
@@ -106,7 +111,7 @@ fn main() {
 }
 ```
 
-> 📖 完整的开发者文档请参阅 [FAP 开发者指南](docs/fap-developer-guide.md)
+> 📖 完整的开发者文档请参阅 [FAP 开发者指南](docs/FAP%20开发者指南.md)
 
 ## 平台支持
 
@@ -159,7 +164,8 @@ FairyAction/
 │   ├── fa-config/        # 配置管理 + FapConfig
 │   └── fa-tester/        # TUI 测试器
 ├── docs/
-│   └── fap-developer-guide.md  # FAP 开发者指南
+│   ├── FAP 开发者指南.md        # FAP 生态完整开发者指南
+│   └── FairyAction集成指南.md   # 宿主软件集成指南
 └── Cargo.toml
 ```
 
